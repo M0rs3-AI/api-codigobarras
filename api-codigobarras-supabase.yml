@@ -1,0 +1,79 @@
+# Stack de Docker Swarm: API MSSQL proxy.
+# Usa el Traefik ya existente en la VPS (conectado a general_network),
+# no despliega uno propio.
+#
+# Pasos manuales una sola vez por VPS (no requieren script):
+#   1. docker swarm init                                  (si aún no es swarm)
+#   2. echo -n "$(openssl rand -hex 32)" | docker secret create internal_secret -
+#      -> copia el secret impreso por openssl, va en Supabase como VPS_INTERNAL_SECRET
+#   3. Verifica que el dominio (linea marcada EDITAR) apunte al VPS
+#
+# Para desplegar / actualizar:
+#   docker build -t bizor-mssql-proxy:latest .
+#   docker stack deploy -c api-codigobarras-supabase.yml bizor
+#
+# Verificar:
+#   docker service ps bizor_api-codigobarras-supabase
+#   docker service logs -f bizor_api-codigobarras-supabase
+#   curl https://codigobarras.bizor.cloud/health
+
+# docker build y docker stack deploy -c api-codigobarras-supabase.yml bizor
+
+version: "3.9"
+
+services:
+  api-codigobarras-supabase:
+    image: bizor-mssql-proxy:latest
+    networks:
+      - general_network
+    secrets:
+      - internal_secret
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      INTERNAL_SECRET_FILE: /run/secrets/internal_secret
+      TRUST_PROXY_HOPS: "1"
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      replicas: 1
+      update_config:
+        order: start-first
+        failure_action: rollback
+        delay: 5s
+      rollback_config:
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        max_attempts: 5
+        window: 30s
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
+        reservations:
+          memory: 128M
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.bizor-api.rule=Host(`codigobarras.bizor.cloud`) # EDITAR
+        - traefik.http.routers.bizor-api.entrypoints=websecure
+        - traefik.http.routers.bizor-api.tls.certresolver=letsencryptresolver
+        - traefik.http.services.bizor-api.loadbalancer.server.port=3000
+        # Defensa en profundidad opcional: restringir a las IPs salientes
+        # de Supabase (https://supabase.com/docs/guides/functions/networking).
+        # Descomentar y completar el rango para activarlo:
+        # - traefik.http.routers.bizor-api.middlewares=bizor-ipallow
+        # - traefik.http.middlewares.bizor-ipallow.ipallowlist.sourcerange=203.0.113.0/24
+
+networks:
+  general_network:
+    external: true
+    name: general_network
+
+secrets:
+  internal_secret:
+    external: true
