@@ -1,7 +1,7 @@
 {
-  "name": "bizor-mssql-proxy",
+  "name": "bridge-codigobarras",
   "version": "1.0.0",
-  "description": "Proxy API para conexiones MSSQL multi-tenant del sistema Bizor",
+  "description": "Bridge local para consultar codigos de barras contra SQL Server, instalable en el servidor de cada cliente",
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",

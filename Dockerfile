@@ -18,14 +18,13 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
-COPY deploy/healthcheck.js ./healthcheck.js
 
 # Imagen base node:alpine ya trae el usuario sin privilegios "node" (uid 1000)
 USER node
 
-EXPOSE 3000
+EXPOSE 3001
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
-  CMD node healthcheck.js
+  CMD wget -qO- "http://127.0.0.1:${PORT:-3001}/health" || exit 1
 
 CMD ["node", "dist/server.js"]

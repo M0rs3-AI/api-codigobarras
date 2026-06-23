@@ -1,0 +1,38 @@
+# Bridge de codigo de barras - despliegue local en el servidor del cliente.
+#
+# Expone el bridge a internet via Cloudflare Tunnel (servicio "cloudflared"),
+# por lo que NO es necesario abrir ningun puerto en el firewall del cliente.
+# Ver cloudflared.md para el paso a paso de como crear el tunel y obtener
+# el CLOUDFLARE_TUNNEL_TOKEN.
+#
+# Uso:
+#   1. Copia .env.example a .env y completa tus datos (ver README.md y cloudflared.md).
+#   2. docker compose -f api-codigobarras.yml up -d --build
+#   3. curl https://TU-SUBDOMINIO.tudominio.com/health   (desde fuera del servidor)
+#
+# Variables (vienen de .env, docker-compose las lee automaticamente):
+#   BRIDGE_TOKEN, SQL_SERVER, SQL_PORT, SQL_DATABASE, SQL_USER, SQL_PASSWORD,
+#   SP_NAME, PORT, CLOUDFLARE_TUNNEL_TOKEN
+
+services:
+  api-codigobarras:
+    build: .
+    image: bridge-codigobarras:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    extra_hosts:
+      # Permite usar "host.docker.internal" cuando SQL Server corre en el
+      # mismo Windows Server que Docker (ver README.md). No afecta si no se usa.
+      - "host.docker.internal:host-gateway"
+    # Sin "ports": con cloudflared no hace falta publicar el puerto al host.
+    # Si necesitas probar localmente sin tunel, descomenta estas dos lineas:
+    # ports:
+    #   - "${PORT}:${PORT}"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - api-codigobarras
