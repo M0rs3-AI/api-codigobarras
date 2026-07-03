@@ -32,6 +32,9 @@ yarn-error.*
 # local env files
 .env*.local
 
+# node-windows service (logs/daemon generados en el servidor)
+daemon/
+
 # typescript
 *.tsbuildinfo
 
