@@ -1,18 +1,14 @@
-# Instalación en Windows Server (nativo, sin Docker)
+# Instalación en Windows Server
 
-Guía para correr el bridge **directamente con Node.js** en Windows Server, sin
-Docker. Es la opción recomendada cuando el SQL Server está en el mismo Windows
-Server (te conectas por `localhost`, sin el enredo de `host.docker.internal`).
+Guía para correr el bridge **directamente con Node.js** en Windows Server. Es
+lo más simple cuando el SQL Server está en el mismo Windows Server: te conectas
+por `localhost` sin más.
 
-> ¿Prefieres Docker (Linux o Windows con contenedores)? Usa el
-> [`README.md`](./README.md).
-
-## Por qué nativo
+## Por qué Node directo
 
 El bridge es solo Node + Express + `tedious` (sin módulos nativos que compilar),
-así que corre perfecto en Windows sin Docker. Docker Desktop en Windows Server es
-engorroso (pide WSL2/Hyper-V y su licencia en Server es un lío), y para contenedores
-Linux necesitas WSL2. Nativo evita todo eso.
+así que corre perfecto en Windows sin ninguna capa extra. Se instala como
+servicio de Windows y listo.
 
 ## Requisitos
 
@@ -42,7 +38,7 @@ npm run build   # genera dist\server.js
 ## 3. Crear el `.env`
 
 Copia `.env.example` a `.env` y complétalo. **Con el SQL Server en la misma
-máquina, usa `localhost`** (a diferencia de Docker, que usaría `host.docker.internal`):
+máquina, usa `localhost`**:
 
 ```
 BRIDGE_TOKEN=<el mismo token guardado en Supabase>
@@ -53,7 +49,6 @@ SQL_USER=usuario
 SQL_PASSWORD=contrasena
 SP_NAME=INV_Pproductos_Seek_Codigo_Barra
 PORT=3001
-HOST_PORT=3001
 ```
 
 Si el SQL Server está en **otro servidor** de la red, pon su IP o nombre en
@@ -75,7 +70,7 @@ Si responde `{ "status": "ok", ... }`, corta con `Ctrl+C` y sigue.
 
 ## 5. Instalarlo como servicio de Windows
 
-Se usa **`node-windows`** (reemplazo moderno de NSSM, que ya está abandonado).
+Se usa **`node-windows`**.
 Los scripts `service-install.js` y `service-uninstall.js` ya vienen en el repo y
 usan rutas relativas, así que funcionan sin importar dónde copiaste la carpeta.
 

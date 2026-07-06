@@ -4,28 +4,23 @@ Mini API que se instala **en el servidor del cliente** (no en una nube
 externa) y conecta el sistema de códigos de barras con la base de datos SQL
 Server local del cliente, a través de un stored procedure.
 
-Dos formas de instalarlo:
-
-- **Docker** (Linux, o Windows con contenedores): no hay que instalar Node.js ni
-  drivers; solo Docker. Es lo que describe este README.
-- **Windows Server nativo (sin Docker)**: recomendado cuando el SQL Server está en
-  el mismo Windows Server. Paso a paso en
-  [`windows-server.md`](./windows-server.md).
+Corre **directamente con Node.js** (Express + `tedious`), sin módulos nativos
+que compilar, así que funciona en Windows Server sin complicaciones. La
+instalación paso a paso está en [`windows-server.md`](./windows-server.md).
 
 Se expone a internet de una de dos formas, según cómo esté montado el servidor
 del cliente (paso a paso en [`reverse-proxy.md`](./reverse-proxy.md)):
 
-- **Opción A — Publicar un puerto**: abres un puerto del cliente/VPS en el
-  firewall y el contenedor escucha ahí directamente.
-- **Opción B — Reverse proxy**: un proxy (Traefik, nginx, Caddy...) enruta
-  varios servicios por un único puerto (80/443) hacia este bridge.
+- **Opción A — Publicar un puerto**: abres un puerto del servidor en el
+  firewall y el bridge escucha ahí directamente.
+- **Opción B — Reverse proxy**: un proxy (nginx, IIS, Caddy...) enruta varios
+  servicios por un único puerto (80/443) hacia este bridge.
 
 ## Requisitos
 
-- Docker instalado en el servidor del cliente (Docker Desktop en Windows, o
-  Docker Engine en Linux). Para la instalación **sin Docker** en Windows Server,
-  ver [`windows-server.md`](./windows-server.md).
-- Acceso de red desde el contenedor hacia el SQL Server (mismo servidor o
+- **Node.js 20 LTS** en el servidor del cliente (instalador `.msi` de
+  [nodejs.org](https://nodejs.org)).
+- Acceso de red desde el bridge hacia el SQL Server (mismo servidor o
   servidor en la misma red).
 
 ## 1. Configurar
@@ -48,53 +43,36 @@ SQL_USER=usuario
 SQL_PASSWORD=contrasena
 SP_NAME=nombre_stored_procedure
 PORT=3001
-HOST_PORT=3001
 ```
 
-`PORT` es el puerto interno del contenedor y `HOST_PORT` es el puerto que se
-publica en el host (el que abres en el firewall). Si usas un reverse proxy en
-vez de publicar el puerto, `HOST_PORT` se ignora; ver
-[`reverse-proxy.md`](./reverse-proxy.md).
+`PORT` es el puerto en el que escucha el bridge: el que abres en el firewall
+(Opción A) o al que apunta el reverse proxy (Opción B).
 
-### ⚠️ Importante: SQL_SERVER en Windows Server con Docker
+Si el SQL Server corre en el **mismo servidor** que el bridge, usa
+`SQL_SERVER=localhost`. Si está en **otro servidor** de la red, usa su IP o
+nombre de red (ej. `192.168.1.50`).
 
-Si el SQL Server corre en el **mismo Windows Server** donde corre Docker,
-**NO uses `localhost`** en `SQL_SERVER`. Desde dentro del contenedor,
-`localhost` apunta al propio contenedor, no al Windows Server que lo
-hospeda.
+## 2. Instalar y levantar
 
-Usa en su lugar:
+La instalación como servicio de Windows (arranca solo con el servidor y se
+reinicia si se cae) está detallada en [`windows-server.md`](./windows-server.md).
+En resumen:
 
+```powershell
+npm ci
+npm run build          # genera dist\server.js
+node service-install.js   # registra el servicio BridgeCodigoBarras
 ```
-SQL_SERVER=host.docker.internal
-```
 
-Esto le dice al contenedor "conéctate a la máquina que me hospeda". El
-archivo `api-codigobarras.yml` ya viene preparado para que
-`host.docker.internal` funcione también en Docker Engine para Windows.
-
-Si el SQL Server está en **otro servidor** de la red, usa su IP o nombre de
-red normalmente (ej. `192.168.1.50`).
-
-## 2. Elegir cómo exponer el bridge (una sola vez por cliente)
+## 3. Elegir cómo exponer el bridge (una sola vez por cliente)
 
 Decide entre publicar un puerto (Opción A) o usar un reverse proxy
 (Opción B) según el servidor del cliente. El paso a paso de cada una está en
 [`reverse-proxy.md`](./reverse-proxy.md):
 
-- **Opción A**: ajusta `HOST_PORT` en el `.env` y abre ese puerto en el
-  firewall del cliente/VPS.
-- **Opción B**: comenta la sección `ports:` del compose y conecta el
-  contenedor a la red del reverse proxy (Traefik/nginx/Caddy).
-
-## 3. Levantar el contenedor
-
-```
-docker compose -f api-codigobarras.yml up -d --build
-```
-
-Esto levanta el bridge (`api-codigobarras`) en segundo plano. Si se cae o el
-servidor reinicia, Docker lo vuelve a levantar solo (`restart: unless-stopped`).
+- **Opción A**: abre el puerto `PORT` en el firewall del servidor.
+- **Opción B**: no abras el puerto directamente; configura el reverse proxy
+  (nginx/IIS/Caddy) para que enrute hacia `127.0.0.1:PORT`.
 
 ## 4. Verificar que funciona
 
@@ -108,20 +86,12 @@ curl http://IP-O-DOMINIO-DEL-SERVIDOR:3001/health
 curl https://cliente1.tudominio.com/health
 ```
 
-Usa el puerto (`HOST_PORT`) o el hostname que configuraste. Debe responder
+Usa el puerto (`PORT`) o el hostname que configuraste. Debe responder
 algo como:
 
 ```json
 { "status": "ok", "timestamp": "2026-06-23T12:00:00.000Z", "version": "1.0.0" }
 ```
-
-Si quieres probar localmente desde el propio servidor:
-
-```
-docker compose -f api-codigobarras.yml exec api-codigobarras wget -qO- http://localhost:3001/health
-```
-
-(cambia `3001` si usaste otro `PORT`).
 
 ## Endpoints
 
@@ -204,46 +174,26 @@ dentro de `data` (en vez de un solo objeto).
 
 Cuando recibas una nueva versión de los archivos del bridge:
 
-```
-docker compose -f api-codigobarras.yml up -d --build
+```powershell
+npm ci
+npm run build
+Restart-Service BridgeCodigoBarras
 ```
 
 Tu `.env` no se toca ni se sobreescribe.
 
-## Comandos útiles
-
-Ver los logs en vivo:
-
-```
-docker compose -f api-codigobarras.yml logs -f
-```
-
-Reiniciar el contenedor:
-
-```
-docker compose -f api-codigobarras.yml restart
-```
-
-Detenerlo:
-
-```
-docker compose -f api-codigobarras.yml down
-```
-
 ## Seguridad
 
-- El `.env` nunca se copia dentro de la imagen Docker; `docker-compose` lo
-  lee desde el disco al levantar el contenedor (`env_file`). No lo subas a
-  ningún repositorio ni lo compartas.
+- El `.env` nunca se sube al repositorio ni se comparte. Contiene las
+  credenciales del SQL Server y el `BRIDGE_TOKEN`.
 - Trata `BRIDGE_TOKEN` como una contraseña: solo el sistema autorizado a
   consultar el bridge debe conocerlo. Como el puerto/hostname es público en
   internet, `BRIDGE_TOKEN` es la única barrera contra quien intente llamar a
   `/query` sin autorización — no lo omitas ni lo debilites.
 - Al publicar un puerto (Opción A), el tráfico va en HTTP plano. Si necesitas
-  HTTPS, usa un reverse proxy (Opción B) que termine el TLS, o pon el servidor
-  detrás de un balanceador/CDN con certificado. Ver
+  HTTPS, usa un reverse proxy (Opción B) que termine el TLS. Ver
   [`reverse-proxy.md`](./reverse-proxy.md).
-- Abre en el firewall únicamente el puerto que necesitas (`HOST_PORT`), y solo
-  hacia donde haga falta. Si usas reverse proxy, no publiques el puerto del
-  bridge directamente: deja que solo el proxy lo alcance por la red interna de
-  Docker.
+- Abre en el firewall únicamente el puerto que necesitas (`PORT`), y solo
+  hacia donde haga falta. Si usas reverse proxy, no abras el puerto del bridge
+  a internet: deja que solo el proxy lo alcance por `127.0.0.1`.
+- El SQL Server queda privado detrás del bridge: nunca se expone a internet.
