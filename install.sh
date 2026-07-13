@@ -114,8 +114,15 @@ echo ""
 log "Instalando como servicio del sistema..."
 
 if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]]; then
-  log "Ejecuta en PowerShell como Administrador:"
-  log "  cd \"$INSTALL_DIR\" && node service-install.js"
+  log "Instalando servicio de Windows (se abrirá una ventana de UAC)..."
+
+  # Convertir ruta MSYS ( /c/Users/... ) a ruta Windows ( C:\Users\... )
+  WIN_INSTALL_DIR=$(echo "$INSTALL_DIR" | sed 's|^/\([a-zA-Z]\)/|\1:\\|' | sed 's|/|\\|g')
+
+  powershell.exe -NoProfile -ExecutionPolicy Bypass \
+    -File "${WIN_INSTALL_DIR}\\install-service.ps1"
+
+  ok "Servicio BridgeCodigoBarras instalado (si aceptaste la UAC)"
 else
   # Linux / macOS — crear servicio systemd
   SERVICE_NAME="bridge-codigobarras"
@@ -160,12 +167,12 @@ echo -e "${GREEN}║   ✅ Bridge instalado y ejecutándose                 ║$
 echo -e "${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${BOLD}Directorio:${NC}  ${CYAN}$INSTALL_DIR${NC}"
-echo -e "  ${BOLD}Servicio:${NC}    ${CYAN}bridge-codigobarras${NC}"
 echo -e "  ${BOLD}Endpoint:${NC}    ${CYAN}http://localhost:${PORT}/health${NC}"
-echo -e "  ${BOLD}Logs:${NC}        ${CYAN}sudo journalctl -u bridge-codigobarras -f${NC}"
-echo ""
-echo -e "  ${YELLOW}Para Windows Server:${NC}"
-echo -e "  Ejecuta en PowerShell ${BOLD}(como Administrador)${NC}:"
-echo -e "    cd \"$INSTALL_DIR\""
-echo -e "    node service-install.js"
+
+if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]]; then
+  echo -e "  ${BOLD}Servicio:${NC}    ${CYAN}BridgeCodigoBarras (services.msc)${NC}"
+else
+  echo -e "  ${BOLD}Servicio:${NC}    ${CYAN}bridge-codigobarras${NC}"
+  echo -e "  ${BOLD}Logs:${NC}        ${CYAN}sudo journalctl -u bridge-codigobarras -f${NC}"
+fi
 echo ""
