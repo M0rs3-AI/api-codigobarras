@@ -32,6 +32,9 @@ yarn-error.*
 # local env files
 .env*.local
 
+# lock file generado por npm (no usamos lock en cliente)
+package-lock.json
+
 # node-windows service (logs/daemon generados en el servidor)
 daemon/
 
