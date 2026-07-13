@@ -3,7 +3,8 @@ set -euo pipefail
 
 # ══════════════════════════════════════════════════════════════
 # Bridge Código de Barras — Instalación automática
-# Ejecutar: curl -fsSL https://raw.githubusercontent.com/.../install.sh | bash
+# Linux / macOS:  curl -fsSL URL | bash
+# Windows:        iex ((New-Object Net.WebClient).DownloadString('URL/install.ps1'))
 # ══════════════════════════════════════════════════════════════
 
 REPO_URL="https://github.com/M0rs3-AI/api-codigobarras.git"
