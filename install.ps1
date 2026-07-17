@@ -7,6 +7,7 @@
 #>
 
 $ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $RepoUrl  = 'https://github.com/M0rs3-AI/api-codigobarras.git'
 $RepoDir  = Join-Path $env:USERPROFILE '.bridge-codigobarras'
 
@@ -44,7 +45,10 @@ Write-Ok "Node.js $(node -v) - npm $(npm -v)"
 # -- 2. Git (para clonar) --------------------------------------
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
   Write-Step "Git no esta instalado. Instalando..."
-  $url = 'https://github.com/git-for-windows/git/releases/latest/download/Git-2.47.1-64-bit.exe'
+  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/git-for-windows/git/releases/latest' -Headers @{ 'User-Agent' = 'bridge-codigobarras-installer' }
+  $asset = $release.assets | Where-Object { $_.name -like '*-64-bit.exe' } | Select-Object -First 1
+  if (-not $asset) { Write-Err "No se pudo determinar la version mas reciente de Git for Windows." }
+  $url = $asset.browser_download_url
   $exe = "$env:TEMP\git-install.exe"
   Invoke-WebRequest -Uri $url -OutFile $exe
   Start-Process $exe -ArgumentList '/VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /COMPONENTS="ext,ext\shellhere,ext\guihere,gitlfs,assoc"' -Wait
