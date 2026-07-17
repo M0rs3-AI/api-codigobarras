@@ -47,7 +47,14 @@ export async function callBarcodeProcedure(
       req.on('row', (columns: Array<{ metadata: { colName: string }; value: unknown }>) => {
         const row: Record<string, unknown> = {};
         for (const col of columns) {
-          row[col.metadata.colName] = col.value;
+          // Columnas binarias (VARBINARY/IMAGE, p.ej. una foto guardada como
+          // bytes) llegan como Buffer. Las enviamos en base64 para que viajen
+          // como texto en el JSON y la app las reconstruya como imagen. La
+          // conversion ocurre aqui, en el servidor propio del tenant.
+          const value = col.value;
+          row[col.metadata.colName] = Buffer.isBuffer(value)
+            ? value.toString('base64')
+            : value;
         }
         rows.push(row);
       });
