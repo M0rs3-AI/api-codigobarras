@@ -20,4 +20,5 @@ export const config = {
     password: required('SQL_PASSWORD'),
   },
   spName: required('SP_NAME'),
+  spParamName: process.env.SP_PARAM_NAME || 'barcode',
 };

@@ -42,7 +42,7 @@ export async function callBarcodeProcedure(
       if (err) { finish(err); return; }
 
       const req = new Request(config.spName, (err2) => finish(err2 ?? undefined));
-      req.addParameter('barcode', TYPES.NVarChar, barcode);
+      req.addParameter(config.spParamName, TYPES.NVarChar, barcode);
 
       req.on('row', (columns: Array<{ metadata: { colName: string }; value: unknown }>) => {
         const row: Record<string, unknown> = {};

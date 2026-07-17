@@ -14,6 +14,9 @@
  */
 const path = require('path');
 const { Service } = require('node-windows');
+require('dotenv/config');
+
+const port = process.env.PORT || 3001;
 
 const svc = new Service({
   name: 'BridgeCodigoBarras',
@@ -30,7 +33,7 @@ const svc = new Service({
 svc.on('install', () => {
   svc.start();
   console.log('Servicio "BridgeCodigoBarras" instalado y arrancado.');
-  console.log('Verifica con:  curl http://localhost:3001/health');
+  console.log(`Verifica con:  curl http://localhost:${port}/health`);
 });
 svc.on('alreadyinstalled', () => {
   console.log('El servicio ya estaba instalado. Reinícialo desde services.msc si actualizaste el código.');

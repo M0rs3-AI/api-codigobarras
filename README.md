@@ -42,6 +42,7 @@ SQL_DATABASE=nombre_db
 SQL_USER=usuario
 SQL_PASSWORD=contrasena
 SP_NAME=nombre_stored_procedure
+SP_PARAM_NAME=barcode
 PORT=3001
 ```
 
@@ -137,9 +138,12 @@ Sin autenticación. Útil para monitoreo.
 ## Cómo debe estar hecho el stored procedure (SP_NAME)
 
 El bridge llama al SP definido en `SP_NAME` pasando **un solo parámetro**
-llamado `@barcode` (texto). El SP debe:
+de texto, cuyo nombre se configura en `SP_PARAM_NAME` (por defecto
+`barcode`, es decir `@barcode`). Si el cliente ya tiene un SP existente
+con otro nombre de parámetro (ej. `@CodigoBarra`), no hace falta tocar el
+SP: solo pon `SP_PARAM_NAME=CodigoBarra` en el `.env`. El SP debe:
 
-1. Aceptar `@barcode NVARCHAR(...)` como parámetro de entrada.
+1. Aceptar el parámetro de entrada como `NVARCHAR(...)`.
 2. Hacer `SET NOCOUNT ON;` al inicio (evita que mensajes de filas afectadas
    interfieran con el resultado).
 3. Devolver el resultado con un `SELECT` (un recordset), no con `RETURN` ni
