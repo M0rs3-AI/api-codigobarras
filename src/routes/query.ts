@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { requireBridgeToken } from '../middleware/requireBridgeToken';
 import { callBarcodeProcedure, callStockProcedure } from '../lib/mssql';
-import { config } from '../config';
 
 const router = Router();
 
@@ -16,11 +15,9 @@ router.post('/', requireBridgeToken, async (req: Request, res: Response) => {
   try {
     // Ambos SP arrancan a la vez (mismo barcode). El de stock es complementario:
     // si falla, NO tumbamos la consulta del producto — solo devolvemos stock: [].
-    let stockError: string | null = null;
     const productPromise = callBarcodeProcedure(barcode);
     const stockPromise = callStockProcedure(barcode).catch((err) => {
-      stockError = (err as Error).message ?? 'stock error';
-      console.error(`[query] stock SP barcode=${barcode} ERROR: ${stockError}`);
+      console.error(`[query] stock SP barcode=${barcode} ERROR: ${(err as Error).message}`);
       return [] as Record<string, unknown>[];
     });
 
@@ -35,14 +32,7 @@ router.post('/', requireBridgeToken, async (req: Request, res: Response) => {
     // se envian todos como arreglo para no perder informacion.
     const data = rows.length === 1 ? rows[0] : rows;
     const stock = await stockPromise;
-    // [DIAG TEMPORAL] Expone qué pasó con el SP de stock. Quitar tras diagnosticar.
-    const _stockDebug = {
-      sp: config.stockSpName,
-      param: config.stockSpParamName,
-      rows: stock.length,
-      error: stockError,
-    };
-    res.json({ success: true, data, stock, _stockDebug });
+    res.json({ success: true, data, stock });
   } catch (err) {
     const message = (err as Error).message ?? 'Error desconocido';
     console.error(`[query] barcode=${barcode} EXCEPTION: ${message}`);
