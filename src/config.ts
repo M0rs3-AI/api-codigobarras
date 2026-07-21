@@ -21,4 +21,10 @@ export const config = {
   },
   spName: required('SP_NAME'),
   spParamName: process.env.SP_PARAM_NAME || 'barcode',
+  // Segundo SP OPCIONAL para stock por bodega. Si SP_STOCK_NAME está vacío, el
+  // bridge no lo llama (retrocompatible con tenants que no tienen este SP).
+  // El SP recibe el mismo código de barras y retorna filas { Nombre, Stock }
+  // (Nombre = bodega). Param por defecto @CodigoBarra.
+  stockSpName: (process.env.SP_STOCK_NAME || '').trim() || null,
+  stockSpParamName: process.env.SP_STOCK_PARAM_NAME || 'CodigoBarra',
 };

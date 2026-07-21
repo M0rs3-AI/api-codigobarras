@@ -43,8 +43,14 @@ SQL_USER=usuario
 SQL_PASSWORD=contrasena
 SP_NAME=nombre_stored_procedure
 SP_PARAM_NAME=barcode
+SP_STOCK_NAME=
+SP_STOCK_PARAM_NAME=CodigoBarra
 PORT=3001
 ```
+
+`SP_STOCK_NAME` es **opcional**: un segundo stored procedure para consultar
+stock por bodega. Si lo dejas vacío, el bridge no lo llama. Ver la sección
+["Stock por bodega"](#stock-por-bodega-sp-opcional) más abajo.
 
 `PORT` es el puerto en el que escucha el bridge: el que abres en el firewall
 (Opción A) o al que apunta el reverse proxy (Opción B).
@@ -60,8 +66,8 @@ reinicia si se cae) está detallada en [`windows-server.md`](./windows-server.md
 En resumen:
 
 ```powershell
-npm ci
-npm run build          # genera dist\server.js
+npm install
+npm run build             # genera dist\server.js
 node service-install.js   # registra el servicio BridgeCodigoBarras
 ```
 
@@ -174,12 +180,27 @@ END
 Si el SP devuelve más de una fila, el bridge las envía todas como arreglo
 dentro de `data` (en vez de un solo objeto).
 
+## Stock por bodega (SP opcional)
+
+`SP_STOCK_NAME` configura un 2º SP para stock por bodega. El bridge lo llama en
+paralelo con el mismo código y lo agrega en `stock`. Debe recibir un parámetro
+de texto (`SP_STOCK_PARAM_NAME`, por defecto `@CodigoBarra`) y devolver columnas
+**`Nombre`** (bodega) y **`Stock`** (cantidad):
+
+```json
+{ "success": true, "data": { ... }, "stock": [ { "Nombre": "Bodega Central", "Stock": 42 } ] }
+```
+
+Si falla o no está configurado, la consulta del producto no se ve afectada
+(devuelve `stock: []`).
+
 ## Actualizar el bridge
 
 Cuando recibas una nueva versión de los archivos del bridge:
 
 ```powershell
-npm ci
+git pull
+npm install
 npm run build
 Restart-Service BridgeCodigoBarras
 ```

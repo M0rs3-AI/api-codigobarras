@@ -1,47 +1,33 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
-
-# dependencies
+# Dependencias
 node_modules/
 
-# Expo
-.expo/
+# Build de TypeScript (se genera en el cliente con "npm run build")
 dist/
-web-build/
-expo-env.d.ts
+*.tsbuildinfo
 
-# Native
-*.orig.*
-*.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
+# Variables de entorno — CREDENCIALES, nunca subir al repositorio.
+# Solo .env.example (plantilla sin secretos) queda versionado.
+.env
+.env.*
+!.env.example
 
-# Metro
-.metro-health-check*
+# Servicio node-windows: logs y daemon generados en el servidor del cliente
+daemon/
 
-# debug
+# Instaladores locales de Node (Node se instala en el servidor, no se versiona)
+*.msi
+
+# Lockfiles: en el cliente se instala con "npm install" (sin lock versionado)
+package-lock.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
+
+# Logs de depuración
 npm-debug.*
 yarn-debug.*
 yarn-error.*
 
-# macOS
+# OS / varios
 .DS_Store
 *.pem
-
-# local env files
-.env*.local
-
-# lock file generado por npm (no usamos lock en cliente)
-package-lock.json
-
-# node-windows service (logs/daemon generados en el servidor)
-daemon/
-
-# typescript
-*.tsbuildinfo
-
-app-example
-
-pnpm-lock.yaml
-pnpm-workspace.yaml
+*.orig.*
