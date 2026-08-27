@@ -1,20 +1,23 @@
-import { Router, Request, Response } from 'express';
-import { requireBridgeToken } from '../middleware/requireBridgeToken';
+import { Request, Response, Router } from 'express';
+
+import { InvalidInput, readBarcode } from '../lib/input';
 import { callBarcodeProcedure, callStockProcedure } from '../lib/mssql';
+import { requireBridgeToken } from '../middleware/requireBridgeToken';
 
 const router = Router();
 
 router.post('/', requireBridgeToken, async (req: Request, res: Response) => {
-  const { barcode } = req.body as { barcode?: string };
-
-  if (!barcode || typeof barcode !== 'string') {
-    res.status(400).json({ success: false, error: 'Falta el campo "barcode" en el body.' });
+  let barcode: string;
+  try {
+    barcode = readBarcode(req.body);
+  } catch (err) {
+    res.status(400).json({ success: false, error: (err as InvalidInput).message });
     return;
   }
 
   try {
-    // Ambos SP arrancan a la vez (mismo barcode). El de stock es complementario:
-    // si falla, NO tumbamos la consulta del producto — solo devolvemos stock: [].
+    // Ambos SP arrancan a la vez. El de stock es complementario: si falla, no
+    // tumba la consulta del producto, solo devuelve stock vacio.
     const productPromise = callBarcodeProcedure(barcode);
     const stockPromise = callStockProcedure(barcode).catch((err) => {
       console.error(`[query] stock SP barcode=${barcode} ERROR: ${(err as Error).message}`);
@@ -24,15 +27,16 @@ router.post('/', requireBridgeToken, async (req: Request, res: Response) => {
     const rows = await productPromise;
 
     if (rows.length === 0) {
+      // El SP de stock sigue en vuelo; ya lleva su propio catch, asi que no
+      // queda un rechazo sin manejar al salir por aqui.
       res.status(404).json({ success: false, error: 'Codigo de barras no encontrado.' });
       return;
     }
 
-    // El SP debe retornar un solo registro por barcode; si retorna varios,
-    // se envian todos como arreglo para no perder informacion.
+    // El SP deberia retornar un solo registro por barcode; si retorna varios,
+    // se envian todos para no perder informacion.
     const data = rows.length === 1 ? rows[0] : rows;
-    const stock = await stockPromise;
-    res.json({ success: true, data, stock });
+    res.json({ success: true, data, stock: await stockPromise });
   } catch (err) {
     const message = (err as Error).message ?? 'Error desconocido';
     console.error(`[query] barcode=${barcode} EXCEPTION: ${message}`);

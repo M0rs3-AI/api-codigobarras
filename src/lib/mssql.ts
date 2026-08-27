@@ -1,89 +1,121 @@
-import { Connection, Request, TYPES } from 'tedious';
-import { config } from '../config';
+/**
+ * Ejecucion de stored procedures.
+ *
+ * Todos los parametros van tipados a traves de tedious (`addParameter`), nunca
+ * concatenados en el texto de la consulta: no hay superficie de inyeccion SQL
+ * aunque el termino de busqueda venga del usuario final.
+ */
+import { Request, TYPES } from 'tedious';
 
-function buildConnectionConfig() {
-  return {
-    server: config.sql.server,
-    authentication: {
-      type: 'default' as const,
-      options: {
-        userName: config.sql.user,
-        password: config.sql.password,
-      },
-    },
-    options: {
-      port: config.sql.port,
-      database: config.sql.database,
-      encrypt: false,
-      trustServerCertificate: true,
-      connectTimeout: 10_000,
-      requestTimeout: 15_000,
-    },
-  };
+import { config } from '../config';
+import { acquire, release } from './pool';
+
+type ParamType = 'string' | 'int';
+
+interface Param {
+  name: string;
+  type: ParamType;
+  value: string | number;
 }
 
 /**
- * Ejecuta un stored procedure que recibe UN parametro string (el codigo de
- * barras) y retorna un recordset. Cada llamada abre y cierra su propia
- * conexion, por lo que dos SP pueden ejecutarse en paralelo con Promise.all.
+ * Ejecuta un SP y devuelve sus filas.
+ *
+ * No se llama a `connection.reset()` al reutilizar la conexion porque el bridge
+ * nunca toca el estado de sesion (sin tablas temporales, sin SET). Anadir ese
+ * viaje extra por consulta no compraria nada.
  */
-function callProcedure(
-  spName: string,
-  paramName: string,
-  barcode: string,
-): Promise<Record<string, unknown>[]> {
-  return new Promise((resolve, reject) => {
-    const connection = new Connection(buildConnectionConfig());
-    const rows: Record<string, unknown>[] = [];
-    let done = false;
+async function callProcedure(spName: string, params: Param[]): Promise<Record<string, unknown>[]> {
+  const entry = await acquire();
+  let failed = false;
 
-    const finish = (err?: Error) => {
-      if (done) return;
-      done = true;
-      try { connection.close(); } catch { /* ignore */ }
-      if (err) reject(err);
-      else resolve(rows);
-    };
+  try {
+    return await new Promise<Record<string, unknown>[]>((resolve, reject) => {
+      const rows: Record<string, unknown>[] = [];
 
-    connection.on('connect', (err) => {
-      if (err) { finish(err); return; }
+      const request = new Request(spName, (err) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
 
-      const req = new Request(spName, (err2) => finish(err2 ?? undefined));
-      req.addParameter(paramName, TYPES.NVarChar, barcode);
+      for (const param of params) {
+        request.addParameter(
+          param.name,
+          param.type === 'int' ? TYPES.Int : TYPES.NVarChar,
+          param.value,
+        );
+      }
 
-      req.on('row', (columns: Array<{ metadata: { colName: string }; value: unknown }>) => {
+      request.on('row', (columns: Array<{ metadata: { colName: string }; value: unknown }>) => {
         const row: Record<string, unknown> = {};
-        for (const col of columns) {
-          // Columnas binarias (VARBINARY/IMAGE, p.ej. una foto guardada como
-          // bytes) llegan como Buffer. Las enviamos en base64 para que viajen
-          // como texto en el JSON y la app las reconstruya como imagen. La
-          // conversion ocurre aqui, en el servidor propio del tenant.
-          const value = col.value;
-          row[col.metadata.colName] = Buffer.isBuffer(value)
-            ? value.toString('base64')
-            : value;
+        for (const column of columns) {
+          // Las columnas binarias (VARBINARY/IMAGE, p.ej. una foto guardada como
+          // bytes) llegan como Buffer. Se envian en base64 para que viajen como
+          // texto en el JSON. La conversion ocurre aqui, en el servidor del
+          // propio cliente, no en un tercero.
+          const value = column.value;
+          row[column.metadata.colName] = Buffer.isBuffer(value) ? value.toString('base64') : value;
         }
         rows.push(row);
       });
 
-      connection.callProcedure(req);
+      entry.connection.callProcedure(request);
     });
-
-    connection.on('error', (err) => finish(err));
-    connection.connect();
-  });
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    release(entry, failed);
+  }
 }
 
-/** SP principal: informacion del producto por codigo de barras. */
+/** SP principal: producto por codigo de barras. */
 export function callBarcodeProcedure(barcode: string): Promise<Record<string, unknown>[]> {
-  return callProcedure(config.spName, config.spParamName, barcode);
+  return callProcedure(config.spName, [
+    { name: config.spParamName, type: 'string', value: barcode },
+  ]);
 }
 
 /**
- * SP de stock por bodega (opcional). Retorna [] si no esta configurado
- * (SP_STOCK_NAME vacio). Cada fila trae { Nombre: bodega, Stock: cantidad }.
+ * SP de stock por bodega (opcional). Devuelve [] si el cliente no lo configuro.
+ * Cada fila trae { Nombre: bodega, Stock: cantidad }.
  */
 export function callStockProcedure(barcode: string): Promise<Record<string, unknown>[]> {
   if (!config.stockSpName) return Promise.resolve([]);
-  return callProcedure(config.stockSpName, config.stockSpParamName, barcode);
+  return callProcedure(config.stockSpName, [
+    { name: config.stockSpParamName, type: 'string', value: barcode },
+  ]);
+}
+
+/**
+ * SP de busqueda por texto (opcional). Busca por codigo interno, nombre o
+ * codigo de barras. `limit` ya viene recortado por la ruta: el cliente no
+ * decide cuanto trabajo se le pide a la base de datos.
+ */
+export function callSearchProcedure(
+  query: string,
+  limit: number,
+): Promise<Record<string, unknown>[]> {
+  if (!config.searchSpName) return Promise.resolve([]);
+  return callProcedure(config.searchSpName, [
+    { name: config.searchSpParamName, type: 'string', value: query },
+    { name: config.searchSpLimitParamName, type: 'int', value: limit },
+  ]);
+}
+
+/** Comprobacion de vida real contra la base, para /health?deep=1. */
+export async function ping(): Promise<void> {
+  const entry = await acquire();
+  let failed = false;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const request = new Request('SELECT 1', (err) => (err ? reject(err) : resolve()));
+      entry.connection.execSql(request);
+    });
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    release(entry, failed);
+  }
 }

@@ -31,3 +31,7 @@ yarn-error.*
 .DS_Store
 *.pem
 *.orig.*
+clientes/
+
+# Artefactos de empaquetado (binarios con credenciales dentro)
+build/

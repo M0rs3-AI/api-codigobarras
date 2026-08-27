@@ -1,224 +1,131 @@
-# Bridge Código de Barras
+npm run package -- --config clientes/acme.json 
 
-Mini API que se instala **en el servidor del cliente** (no en una nube
-externa) y conecta el sistema de códigos de barras con la base de datos SQL
-Server local del cliente, a través de un stored procedure.
+# Bridge Codigo de Barras
 
-Corre **directamente con Node.js** (Express + `tedious`), sin módulos nativos
-que compilar, así que funciona en Windows Server sin complicaciones. La
-instalación paso a paso está en [`windows-server.md`](./windows-server.md).
-
-Se expone a internet de una de dos formas, según cómo esté montado el servidor
-del cliente (paso a paso en [`reverse-proxy.md`](./reverse-proxy.md)):
-
-- **Opción A — Publicar un puerto**: abres un puerto del servidor en el
-  firewall y el bridge escucha ahí directamente.
-- **Opción B — Reverse proxy**: un proxy (nginx, IIS, Caddy...) enruta varios
-  servicios por un único puerto (80/443) hacia este bridge.
-
-## Requisitos
-
-- **Node.js 20 LTS** en el servidor del cliente (instalador `.msi` de
-  [nodejs.org](https://nodejs.org)).
-- Acceso de red desde el bridge hacia el SQL Server (mismo servidor o
-  servidor en la misma red).
-
-## 1. Configurar
-
-Copia `.env.example` a `.env`:
+Servicio que se instala en el servidor de cada cliente y traduce peticiones HTTP
+del sistema de consulta de precios en llamadas a stored procedures de su
+SQL Server. Las credenciales de la base **nunca salen** de ese servidor.
 
 ```
-copy .env.example .env
+Edge Function de Supabase          Servidor del cliente
+  (no conoce las credenciales)
+        |  x-bridge-token                  |
+        +-----> POST /query   ------------>+---> SQL Server (stored procedures)
+        +-----> POST /search  ------------>+
 ```
 
-Edita `.env` con los datos reales. **Es el único archivo que el cliente
-necesita tocar.**
+## Novedades de la version 2
 
-```
-BRIDGE_TOKEN=xxxx-xxxx-xxxx-xxxx
-SQL_SERVER=localhost
-SQL_PORT=1435
-SQL_DATABASE=nombre_db
-SQL_USER=usuario
-SQL_PASSWORD=contrasena
-SP_NAME=nombre_stored_procedure
-SP_PARAM_NAME=barcode
-SP_STOCK_NAME=
-SP_STOCK_PARAM_NAME=CodigoBarra
-PORT=3001
-```
+- **Se distribuye como un unico ejecutable por cliente**, con su configuracion
+  dentro. Ya no se clona el repositorio en el servidor del cliente, ni hace
+  falta Node, Git o npm en su maquina, ni queda un `.env` en disco.
+- **Endpoint `/search`**: busqueda por codigo interno, nombre o codigo de barras.
+- **Pool de conexiones**: antes cada escaneo abria dos conexiones nuevas a SQL
+  Server. Ahora se reutilizan.
+- **Endurecimiento**: servicio con cuenta de bajo privilegio, comparacion de
+  token en tiempo constante, limite por token, topes de entrada, TLS opcional y
+  sonda publica que no revela nada del sistema.
 
-`SP_STOCK_NAME` es **opcional**: un segundo stored procedure para consultar
-stock por bodega. Si lo dejas vacío, el bridge no lo llama. Ver la sección
-["Stock por bodega"](#stock-por-bodega-sp-opcional) más abajo.
+## Empaquetar para un cliente
 
-`PORT` es el puerto en el que escucha el bridge: el que abres en el firewall
-(Opción A) o al que apunta el reverse proxy (Opción B).
-
-Si el SQL Server corre en el **mismo servidor** que el bridge, usa
-`SQL_SERVER=localhost`. Si está en **otro servidor** de la red, usa su IP o
-nombre de red (ej. `192.168.1.50`).
-
-## 2. Instalar y levantar
-
-La instalación como servicio de Windows (arranca solo con el servidor y se
-reinicia si se cae) está detallada en [`windows-server.md`](./windows-server.md).
-En resumen:
-
-```powershell
-npm install
-npm run build             # genera dist\server.js
-node service-install.js   # registra el servicio BridgeCodigoBarras
-```
-
-## 3. Elegir cómo exponer el bridge (una sola vez por cliente)
-
-Decide entre publicar un puerto (Opción A) o usar un reverse proxy
-(Opción B) según el servidor del cliente. El paso a paso de cada una está en
-[`reverse-proxy.md`](./reverse-proxy.md):
-
-- **Opción A**: abre el puerto `PORT` en el firewall del servidor.
-- **Opción B**: no abras el puerto directamente; configura el reverse proxy
-  (nginx/IIS/Caddy) para que enrute hacia `127.0.0.1:PORT`.
-
-## 4. Verificar que funciona
-
-Desde fuera del servidor (tu propia máquina, o Supabase):
-
-```
-# Opción A (puerto publicado):
-curl http://IP-O-DOMINIO-DEL-SERVIDOR:3001/health
-
-# Opción B (reverse proxy):
-curl https://cliente1.tudominio.com/health
-```
-
-Usa el puerto (`PORT`) o el hostname que configuraste. Debe responder
-algo como:
+1. Crear su configuracion en `clientes/<cliente>.json` (esa carpeta esta
+   ignorada por git; contiene credenciales reales):
 
 ```json
-{ "status": "ok", "timestamp": "2026-06-23T12:00:00.000Z", "version": "1.0.0" }
+{
+  "BRIDGE_TOKEN": "<generado con: npm run token>",
+  "SQL_SERVER": "localhost",
+  "SQL_PORT": "1433",
+  "SQL_DATABASE": "nombre_db",
+  "SQL_USER": "bridge_codigobarras",
+  "SQL_PASSWORD": "<contrasena del usuario de minimo privilegio>",
+  "SP_NAME": "INV_Pproductos_Seek_Codigo_Barra",
+  "SP_PARAM_NAME": "CodigoBarra",
+  "SP_STOCK_NAME": "INV_Pproductos_GetStock_Codigo_Barra",
+  "SP_SEARCH_NAME": "INV_Pproductos_Search",
+  "BIND_HOST": "127.0.0.1",
+  "PORT": "3001"
+}
 ```
+
+2. Generar el artefacto:
+
+```bash
+npm run package -- --config clientes/acme.json            # binario nativo
+npm run package -- --config clientes/acme.json --bundle   # .cjs + json (Linux)
+```
+
+El binario **no se compila de forma cruzada**: el `.exe` de Windows se genera en
+Windows y el de Linux en Linux. Para un cliente Linux teniendo tu Windows, usa
+`--bundle`: produce un unico `.cjs` que solo necesita Node en el servidor.
+
+> Al inyectar el blob, Windows avisa de que la firma del ejecutable queda
+> invalidada. Es esperado. Si el cliente tiene SmartScreen estricto, firma el
+> binario resultante con tu propio certificado de firma de codigo.
+
+## Instalar en el servidor del cliente
+
+**Windows** (PowerShell como Administrador):
+
+```powershell
+.\install-windows.ps1 -BinaryPath .\acme.exe
+```
+
+**Linux**:
+
+```bash
+sudo ./install-linux.sh --binary ./acme
+sudo ./install-linux.sh --bundle ./bundle.cjs --config ./acme.env.json
+```
+
+Ambos instaladores dejan el servicio corriendo con una cuenta de bajo privilegio
+y **sin abrir ningun puerto**. Ver `deploy/README-exposicion.md` para exponerlo.
+
+## Preparar la base de datos
+
+Ejecutar en orden, como administrador de SQL Server:
+
+1. `sql/01-usuario-minimo-privilegio.sql` — crea el usuario del bridge. **No te
+   lo saltes.** Es lo que hace que comprometer el bridge no signifique
+   comprometer la base entera.
+2. `sql/02-sp-busqueda.sql` — opcional, habilita `/search`.
 
 ## Endpoints
 
-### `POST /query`
+| Metodo | Ruta | Auth | Descripcion |
+|--------|------|------|-------------|
+| GET | `/health` | no | Sonda. Responde `{"status":"ok"}` y nada mas |
+| GET | `/health/deep` | si | Comprueba la conexion real a SQL Server |
+| POST | `/query` | si | `{ "barcode": "..." }` -> producto + stock |
+| POST | `/search` | si | `{ "q": "...", "limit": 25 }` -> coincidencias |
 
-Headers:
+Auth: header `x-bridge-token`. Respuestas: `200`, `400` entrada invalida, `401`
+token, `404` no encontrado, `413` body grande, `429` limite, `501` busqueda no
+configurada, `503` base no disponible.
 
-```
-x-bridge-token: xxxx-xxxx-xxxx-xxxx
-Content-Type: application/json
-```
+## Configuracion
 
-Body:
+Claves obligatorias: `BRIDGE_TOKEN`, `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`,
+`SQL_PASSWORD`, `SP_NAME`.
 
-```json
-{ "barcode": "codigo_escaneado" }
-```
+| Clave | Por defecto | Para que sirve |
+|-------|-------------|----------------|
+| `PORT` | `3001` | Puerto de escucha |
+| `BIND_HOST` | `0.0.0.0` | `127.0.0.1` con tunel: deja de ser alcanzable desde la red |
+| `SP_PARAM_NAME` | `barcode` | Nombre del parametro del SP principal, sin la `@` |
+| `SP_STOCK_NAME` | vacio | SP de stock por bodega. Vacio = el cliente no lo usa |
+| `SP_SEARCH_NAME` | vacio | SP de busqueda. Vacio = `/search` responde 501 |
+| `SQL_ENCRYPT` | `true` | TLS hacia SQL Server |
+| `SQL_POOL_MAX` | `4` | Conexiones simultaneas |
+| `RATE_LIMIT_PER_MINUTE` | `120` | Peticiones por minuto **por token** |
+| `MAX_SEARCH_RESULTS` | `25` | Tope de resultados. El cliente solo puede pedir menos |
+| `TLS_ENABLED` | `false` | HTTPS directo (ver `deploy/README-exposicion.md`) |
 
-Respuesta exitosa:
+## Desarrollo
 
-```json
-{ "success": true, "data": { ...resultado_del_SP } }
-```
-
-Respuesta de error (token inválido, código no encontrado, falla de SQL,
-etc.):
-
-```json
-{ "success": false, "error": "mensaje descriptivo" }
-```
-
-Si el token del header no coincide con `BRIDGE_TOKEN` del `.env`, responde
-`401`.
-
-### `GET /health`
-
-Sin autenticación. Útil para monitoreo.
-
-```json
-{ "status": "ok", "timestamp": "...", "version": "1.0.0" }
-```
-
-## Cómo debe estar hecho el stored procedure (SP_NAME)
-
-El bridge llama al SP definido en `SP_NAME` pasando **un solo parámetro**
-de texto, cuyo nombre se configura en `SP_PARAM_NAME` (por defecto
-`barcode`, es decir `@barcode`). Si el cliente ya tiene un SP existente
-con otro nombre de parámetro (ej. `@CodigoBarra`), no hace falta tocar el
-SP: solo pon `SP_PARAM_NAME=CodigoBarra` en el `.env`. El SP debe:
-
-1. Aceptar el parámetro de entrada como `NVARCHAR(...)`.
-2. Hacer `SET NOCOUNT ON;` al inicio (evita que mensajes de filas afectadas
-   interfieran con el resultado).
-3. Devolver el resultado con un `SELECT` (un recordset), no con `RETURN` ni
-   parámetros de salida.
-4. Idealmente devolver **una sola fila** por código de barras. Si no
-   encuentra nada, simplemente no devolver filas (el bridge responde
-   automáticamente `success: false` con "Código de barras no encontrado").
-
-Ejemplo mínimo de SP compatible:
-
-```sql
-CREATE PROCEDURE nombre_stored_procedure
-  @barcode NVARCHAR(50)
-AS
-BEGIN
-  SET NOCOUNT ON;
-
-  SELECT
-    p.codigo_barras,
-    p.nombre,
-    p.precio,
-    p.stock
-  FROM Productos p
-  WHERE p.codigo_barras = @barcode;
-END
-```
-
-Si el SP devuelve más de una fila, el bridge las envía todas como arreglo
-dentro de `data` (en vez de un solo objeto).
-
-## Stock por bodega (SP opcional)
-
-`SP_STOCK_NAME` configura un 2º SP para stock por bodega. El bridge lo llama en
-paralelo con el mismo código y lo agrega en `stock`. Debe recibir un parámetro
-de texto (`SP_STOCK_PARAM_NAME`, por defecto `@CodigoBarra`) y devolver columnas
-**`Nombre`** (bodega) y **`Stock`** (cantidad):
-
-```json
-{ "success": true, "data": { ... }, "stock": [ { "Nombre": "Bodega Central", "Stock": 42 } ] }
-```
-
-Si falla o no está configurado, la consulta del producto no se ve afectada
-(devuelve `stock: []`).
-
-## Actualizar el bridge
-
-Cuando recibas una nueva versión de los archivos del bridge:
-
-```powershell
-git pull
+```bash
 npm install
-npm run build
-Restart-Service BridgeCodigoBarras
+cp .env.example .env
+npm run dev          # tsx watch
+npm run typecheck
 ```
-
-Tu `.env` no se toca ni se sobreescribe.
-
-## Seguridad
-
-- El `.env` nunca se sube al repositorio ni se comparte. Contiene las
-  credenciales del SQL Server y el `BRIDGE_TOKEN`.
-- Trata `BRIDGE_TOKEN` como una contraseña: solo el sistema autorizado a
-  consultar el bridge debe conocerlo. Como el puerto/hostname es público en
-  internet, `BRIDGE_TOKEN` es la única barrera contra quien intente llamar a
-  `/query` sin autorización — no lo omitas ni lo debilites.
-- Al publicar un puerto (Opción A), el tráfico va en HTTP plano. Si necesitas
-  HTTPS, usa un reverse proxy (Opción B) que termine el TLS. Ver
-  [`reverse-proxy.md`](./reverse-proxy.md).
-- Abre en el firewall únicamente el puerto que necesitas (`PORT`), y solo
-  hacia donde haga falta. Si usas reverse proxy, no abras el puerto del bridge
-  a internet: deja que solo el proxy lo alcance por `127.0.0.1`.
-- El SQL Server queda privado detrás del bridge: nunca se expone a internet.
