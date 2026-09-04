@@ -82,6 +82,25 @@ function number(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+/**
+ * Nombre de stored procedure. Un identificador no puede viajar como parametro,
+ * tiene que ir en el texto de la consulta; estos salen de la configuracion
+ * incrustada, no de una peticion HTTP. Se valida igualmente para que una
+ * configuracion mal escrita falle al arrancar y no en produccion.
+ */
+function procedureName(name: string, fallback: string): string {
+  const value = raw(name) ?? fallback;
+
+  if (!/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+){0,2}$/.test(value)) {
+    throw new Error(
+      `${name}="${value}" no es un nombre de procedimiento valido. ` +
+        'Formato esperado: nombre, esquema.nombre o base.esquema.nombre.',
+    );
+  }
+
+  return value;
+}
+
 function boolean(name: string, fallback: boolean): boolean {
   const value = raw(name)?.toLowerCase();
   if (value === undefined) return fallback;
@@ -100,6 +119,12 @@ export const config = {
   port: number('PORT', 3001),
   bindHost,
   nodeEnv: optional('NODE_ENV') ?? 'production',
+
+  /**
+   * Deja GET /health sin token. Por defecto false: si el bridge queda tras un
+   * puerto abierto, un escaneo no debe obtener ni un 200.
+   */
+  healthPublic: boolean('HEALTH_PUBLIC', false),
 
   sql: {
     server: required('SQL_SERVER'),
@@ -140,35 +165,40 @@ export const config = {
   searchSpLimitParamName: optional('SP_SEARCH_LIMIT_PARAM_NAME') ?? 'top',
 
   /**
-   * Login de usuario contra la base del cliente.
+   * Login contra SEG_USUARIOS. Desactivado salvo que el cliente lo pida
+   * explicitamente en su JSON.
    *
-   * `enabled` arranca en false a proposito: mientras el descifrado de la
-   * credencial y la consulta a la base sigan siendo placeholders (ver
-   * lib/crypto.ts y repositories/users.ts), activarlo dejaria el bridge sin
-   * poder responder ninguna consulta. Se pone a true en la configuracion del
-   * cliente en cuanto esas dos piezas esten implementadas.
+   * El mismo bridge sirve a apps con login y sin el. Activarlo por defecto
+   * significaria que empaquetar el bridge de un cliente cuya app no tiene
+   * pantalla de login lo deja con 401 en cada escaneo y sin forma de entrar.
    */
   auth: {
     enabled: boolean('AUTH_ENABLED', false),
-    /**
-     * Clave de firma de las sesiones. Si falta se deriva del BRIDGE_TOKEN por
-     * HKDF (ver lib/crypto.ts); configurarla aparte es lo recomendable.
-     */
+
+    /** SP de la contrasena cifrada. El del ERP ya filtra por Anulado = 0. */
+    loginSpName: procedureName('AUTH_SP_LOGIN_NAME', 'dbo.SEG_Usuarios_Select_Password'),
+
+    /** SP ligero de "sigue de alta". Vacio = se reutiliza el de login. */
+    statusSpName: optional('AUTH_SP_STATUS_NAME')
+      ? procedureName('AUTH_SP_STATUS_NAME', '')
+      : null,
+
+    /** Pagina de codigos de la columna Password. Ver lib/crypto.ts. */
+    passwordEncoding: (optional('AUTH_PASSWORD_ENCODING') ?? 'cp1252') as 'cp1252' | 'latin1',
+
+    /** Sin valor se deriva del BRIDGE_TOKEN por HKDF (lib/crypto.ts). */
     secret: optional('AUTH_SECRET'),
     sessionTtlMinutes: number('AUTH_SESSION_TTL_MINUTES', 720),
+
     /**
-     * Segundos que se reutiliza un "usuario activo" ya comprobado.
-     *
-     * La comprobacion se hace en CADA escaneo; esta ventana solo evita que una
-     * rafaga de escaneos seguidos golpee la base una vez por codigo. Un 0
-     * desactiva la cache y consulta siempre. Los resultados negativos
-     * (inactivo, borrado) NUNCA se cachean: dar de baja a alguien surte efecto
-     * de inmediato.
+     * Segundos que se reutiliza un "activo" ya comprobado; 0 = consultar
+     * siempre. Solo evita que una rafaga de escaneos golpee la base una vez por
+     * codigo. Los negativos nunca se cachean: la baja es inmediata.
      */
     statusCacheSeconds: number('AUTH_STATUS_CACHE_SECONDS', 15),
-    /** Intentos de login por minuto y por (usuario, IP). Deliberadamente bajo. */
     loginRatePerMinute: number('AUTH_LOGIN_RATE_PER_MINUTE', 10),
-    maxUsernameLength: number('AUTH_MAX_USERNAME_LENGTH', 64),
+    /** 15 = ancho de SEG_USUARIOS.Codigo. */
+    maxUsernameLength: number('AUTH_MAX_USERNAME_LENGTH', 15),
     maxPasswordLength: number('AUTH_MAX_PASSWORD_LENGTH', 128),
   },
 

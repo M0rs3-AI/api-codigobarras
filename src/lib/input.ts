@@ -70,11 +70,9 @@ export function readLimit(body: unknown): number {
 /**
  * Credenciales de login.
  *
- * Se acotan longitudes ANTES de tocar la base: una contrasena de 10 MB no es un
- * intento de login, es un intento de gastar CPU del servidor del cliente. El
- * usuario se recorta y se pasa a minusculas para que "Juan" y "juan" no creen
- * dos cubos de rate limit distintos; la contrasena NO se toca (los espacios y
- * los caracteres de control pueden ser parte legitima de la contrasena).
+ * Se acotan longitudes ANTES de tocar la base. El usuario se recorta pero se
+ * respeta tal cual: normalizarlo aqui romperia una instalacion con
+ * intercalacion sensible a mayusculas. La contrasena no se toca.
  */
 export interface Credentials {
   usuario: string;
@@ -88,7 +86,7 @@ export function readCredentials(body: unknown): Credentials {
     throw new InvalidInput('Se requieren los campos "usuario" y "password".');
   }
 
-  const usuario = sanitize(source.usuario).toLowerCase();
+  const usuario = sanitize(source.usuario);
   const password = source.password;
 
   if (usuario.length === 0) {

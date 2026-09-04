@@ -24,7 +24,7 @@ Edge Function de Supabase          Servidor del cliente
   Server. Ahora se reutilizan.
 - **Endurecimiento**: servicio con cuenta de bajo privilegio, comparacion de
   token en tiempo constante, limite por token, topes de entrada, TLS opcional y
-  sonda publica que no revela nada del sistema.
+  y ninguna ruta que responda sin token.
 
 ## Empaquetar para un cliente
 
@@ -65,6 +65,10 @@ Windows y el de Linux en Linux. Para un cliente Linux teniendo tu Windows, usa
 
 ## Instalar en el servidor del cliente
 
+Guia paso a paso, de SQL Server al tunel: **[`deploy/GUIA-INSTALACION.md`](deploy/GUIA-INSTALACION.md)**.
+
+Resumen:
+
 **Windows** (PowerShell como Administrador):
 
 ```powershell
@@ -90,19 +94,22 @@ Ejecutar en orden, como administrador de SQL Server:
    comprometer la base entera.
 2. `sql/02-sp-busqueda.sql` — opcional, habilita `/search`.
 3. `sql/03-auth-usuarios.sql` — opcional, habilita el login de usuario
-   (`AUTH_ENABLED`). Es una plantilla: ajusta los nombres al esquema real del
-   cliente antes de ejecutarla.
+   (`AUTH_ENABLED`). No crea tablas: el SP ya existe en el ERP y lo unico
+   obligatorio es un `GRANT EXECUTE`.
 
 ## Endpoints
 
 | Metodo | Ruta | Auth | Descripcion |
 |--------|------|------|-------------|
-| GET | `/health` | no | Sonda. Responde `{"status":"ok"}` y nada mas |
+| GET | `/health` | si* | Sonda. Responde `{"status":"ok"}` y nada mas |
 | GET | `/health/deep` | si | Comprueba la conexion real a SQL Server |
 | POST | `/auth/login` | si | `{ "usuario", "password" }` -> token de sesion |
 | GET | `/auth/session` | si + sesion | Revalida la sesion y el estado de la cuenta |
 | POST | `/query` | si + sesion | `{ "barcode": "..." }` -> producto + stock |
 | POST | `/search` | si + sesion | `{ "q": "...", "limit": 25 }` -> coincidencias |
+
+\* `/health` se puede abrir con `HEALTH_PUBLIC=true`. Por defecto lleva token,
+para que escanear el puerto no devuelva ni un `200`.
 
 Auth: header `x-bridge-token` **siempre**; ademas `Authorization: Bearer
 <sesion>` cuando `AUTH_ENABLED=true`. Respuestas: `200`, `400` entrada invalida,
@@ -111,11 +118,14 @@ grande, `429` limite, `501` funcion no configurada, `503` base no disponible.
 
 ## Login de usuario y licencia activa
 
-Opcional, controlado por `AUTH_ENABLED`. Cuando esta activo:
+Se activa por cliente con `AUTH_ENABLED=true`. El mismo bridge sirve a apps con
+login y sin el, asi que por defecto esta apagado. Cuando esta activo:
 
 1. La app pide **usuario y contrasena** ademas de la clave de activacion.
-2. `POST /auth/login` los valida contra la base del cliente y devuelve un token
-   de sesion firmado (HMAC-SHA256, 12 h por defecto).
+2. `POST /auth/login` los valida contra `SEG_USUARIOS` **en el SQL Server del
+   propio cliente** y devuelve un token de sesion firmado (HMAC-SHA256, 12 h por
+   defecto). Ni Supabase ni ningun servicio intermedio guarda o comprueba
+   contrasenas: solo las reenvia.
 3. **Cada** consulta de `/query` y `/search` vuelve a preguntar a la base si la
    cuenta sigue activa. No se espera a que caduque la sesion: dar de baja a un
    usuario corta el servicio en su siguiente escaneo.
@@ -126,46 +136,47 @@ Opcional, controlado por `AUTH_ENABLED`. Cuando esta activo:
 ```
 POST /auth/login          x-bridge-token + { usuario, password }
   -> 200 { token, expiresAt }
-  -> 401 invalid_credentials      usuario o contrasena mal (mismo error para
-                                  ambos: el endpoint no sirve para saber que
-                                  usuarios existen)
-  -> 403 account_inactive         credenciales correctas, cuenta dada de baja
+  -> 401 invalid_credentials      usuario inexistente, dado de baja o
+                                  contrasena incorrecta. El MISMO error para los
+                                  tres: el endpoint no sirve para averiguar que
+                                  usuarios existen ni cuales siguen de alta
   -> 429 too_many_attempts        10 intentos/min por (usuario, IP)
+  -> 500 credential_unreadable    la columna Password no la produjo el
+                                  algoritmo del ERP -> fallo de configuracion
   -> 503 auth_unavailable         la base no responde -> NO se borra nada
 ```
+
+La baja (`Anulado = 1`) se detecta donde importa: en cada escaneo. `/query`
+responde entonces `403 account_inactive` y la app borra todo lo que tenga
+guardado.
 
 Un fallo de conexion nunca se traduce en "inactivo": si lo hiciera, cada
 reinicio del servidor del cliente desactivaria todos los dispositivos.
 
-### Lo que falta por implementar
+### Como se valida la contrasena
 
-Dos piezas dependen del esquema del cliente y estan marcadas como PLACEHOLDER:
+`SEG_USUARIOS.Password` no guarda un hash: guarda el **"Desempaquetador de
+Claves V.5"** de FoxPro, un desplazamiento reversible. El bridge lo reimplementa
+byte a byte en `src/lib/crypto.ts` (`npm run test:crypto` lo comprueba contra el
+algoritmo original, incluidos los casos de codificacion).
 
-| Pieza | Archivo | Que falta |
-|-------|---------|-----------|
-| Descifrado de la credencial | `src/lib/crypto.ts` | Algoritmo, origen de la clave y codificacion de la columna |
-| Consulta a la base | `src/repositories/users.ts` + `src/lib/db.ts` | Nombre real de la tabla y de sus columnas |
+> **Esto es ofuscacion, no cifrado.** Su unico secreto es el propio algoritmo:
+> quien pueda leer esa columna recupera las contrasenas en claro. No se puede
+> cambiar sin tocar el ERP, que escribe esa misma columna. La defensa real es
+> que el usuario de SQL del bridge **no puede leer `SEG_USUARIOS`**: solo
+> ejecutar el SP. Por eso no hay que "simplificar" dandole `db_datareader`.
 
-`sql/03-auth-usuarios.sql` es la plantilla de la parte de base de datos, con la
-alternativa recomendada: **descifrar dentro de SQL Server** (`DecryptByKey`), de
-forma que ni el ciphertext ni la clave salgan nunca de la base y el bridge solo
-reciba un booleano.
+**Detalle de codificacion que importa:** la contrasena cifrada cae siempre en
+bytes altos (`'admin'` -> `175 169 172 162 158`), y como la columna es `varchar`
+el driver la entrega ya convertida a texto segun la pagina de codigos de la
+intercalacion — justo en el tramo `0x80-0x9F`, donde CP1252 e ISO-8859-1 no
+coinciden. El bridge asume CP1252 y lo deja cambiar con `AUTH_PASSWORD_ENCODING`.
+Si una instalacion usa otra pagina de codigos, `sql/03-auth-usuarios.sql` incluye
+un SP envoltorio que devuelve `varbinary`: con el, el bridge recibe los bytes
+crudos y la pagina de codigos deja de importar.
 
-Mientras esos huecos sigan sin rellenar, `AUTH_ENABLED` debe quedarse en
-`false`: con `true` el login responde `501 not_implemented`.
-
-### Consultas tipadas (Kysely)
-
-Las consultas del login se construyen con **Kysely**, no a mano. Las de producto
-siguen llamando a stored procedures con tedious, que es lo correcto alli: no hay
-SQL que construir, solo parametros que pasar tipados.
-
-Donde si hay SQL que escribir -el login- un query builder aporta dos cosas: los
-valores van **siempre** parametrizados (no existe la opcion de interpolarlos en
-el texto) y el esquema esta declarado en TypeScript, asi que un nombre de columna
-equivocado falla al compilar y no en el servidor del cliente. El pool de Kysely
-es aparte y como mucho abre 2 conexiones: el login no debe competir por las
-conexiones del catalogo, y si `AUTH_ENABLED` es false no se abre ninguna.
+Sintoma de que hace falta: el login falla siempre con credenciales correctas y en
+el log aparece `credencial ilegible`.
 
 ## Configuracion
 
@@ -183,8 +194,12 @@ Claves obligatorias: `BRIDGE_TOKEN`, `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`,
 | `SQL_POOL_MAX` | `4` | Conexiones simultaneas |
 | `RATE_LIMIT_PER_MINUTE` | `120` | Peticiones por minuto **por token** |
 | `MAX_SEARCH_RESULTS` | `25` | Tope de resultados. El cliente solo puede pedir menos |
+| `HEALTH_PUBLIC` | `false` | Deja `/health` sin token |
 | `TLS_ENABLED` | `false` | HTTPS directo (ver `deploy/README-exposicion.md`) |
-| `AUTH_ENABLED` | `false` | Exige login de usuario en `/query` y `/search` |
+| `AUTH_ENABLED` | `false` | Exige login de usuario. Solo para clientes cuya app lo tenga |
+| `AUTH_SP_LOGIN_NAME` | `dbo.SEG_Usuarios_Select_Password` | SP que devuelve la contrasena cifrada |
+| `AUTH_SP_STATUS_NAME` | vacio | SP ligero de "sigue de alta". Vacio = usa el de login |
+| `AUTH_PASSWORD_ENCODING` | `cp1252` | Pagina de codigos de la columna `Password` |
 | `AUTH_SECRET` | derivada | Clave de firma de las sesiones. Mejor propia que derivada |
 | `AUTH_SESSION_TTL_MINUTES` | `720` | Duracion de la sesion |
 | `AUTH_STATUS_CACHE_SECONDS` | `15` | Reutiliza un "activo" ya comprobado. `0` = consultar siempre |

@@ -15,7 +15,6 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 
 import { config, CONFIG_SOURCE } from './config';
-import { closeDb } from './lib/db';
 import { drain } from './lib/pool';
 import authRouter from './routes/auth';
 import healthRouter from './routes/health';
@@ -58,9 +57,8 @@ const limiter = rateLimit({
 });
 
 app.use('/health', healthRouter);
-// /auth lleva su propio limite, mucho mas estrecho (ver routes/auth.ts). No se
-// le aplica `limiter` para que un intento de fuerza bruta no consuma la cuota
-// de escaneo de los dispositivos que si estan trabajando.
+// Limite propio, mucho mas estrecho (ver routes/auth.ts): un intento de fuerza
+// bruta no debe consumir la cuota de escaneo de quien esta trabajando.
 app.use('/auth', authRouter);
 app.use('/query', limiter, queryRouter);
 app.use('/search', limiter, searchRouter);
@@ -129,7 +127,7 @@ function shutdown(signal: string) {
   console.log(`[server] ${signal} recibido, cerrando...`);
   server.close(() => {
     drain();
-    void closeDb().finally(() => process.exit(0));
+    process.exit(0);
   });
   // Si algo se atasca, no dejar el servicio colgado indefinidamente.
   setTimeout(() => process.exit(0), 10_000).unref();

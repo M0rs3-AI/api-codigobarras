@@ -159,6 +159,15 @@ async function main() {
 
   console.log(`> Empaquetando "${name}" (${os.platform()}/${os.arch()})`);
 
+  // Activar el login contra una app que no tiene pantalla de login deja al
+  // cliente con 401 en cada escaneo. Mejor verlo aqui que en la tienda.
+  if (String(config.AUTH_ENABLED ?? 'false').toLowerCase() === 'true') {
+    console.log('  login de usuario: ACTIVO. La app de este cliente DEBE tener');
+    console.log('                    pantalla de login (usuario y contrasena).');
+  } else {
+    console.log('  login de usuario: desactivado');
+  }
+
   const bundlePath = await bundle();
   console.log(`  bundle: ${path.relative(ROOT, bundlePath)} (${(fs.statSync(bundlePath).size / 1024).toFixed(0)} KB)`);
 

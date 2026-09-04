@@ -1,37 +1,17 @@
 /**
- * Primitivas criptograficas del bridge: derivacion de claves, tokens de sesion
- * firmados y los dos huecos que dependen de como cifra las credenciales la base
- * del cliente (ver PLACEHOLDER mas abajo).
+ * Sesiones firmadas y descifrado de SEG_USUARIOS.Password.
  *
- * Todo lo que compara secretos usa comparacion en tiempo constante. Un `===`
- * sobre un token o un hash filtra el secreto byte a byte ante un atacante con
- * suficientes intentos, y aqui los intentos son baratos.
+ * Todo lo que compara secretos lo hace en tiempo constante: un `===` sobre un
+ * token lo filtra byte a byte ante un atacante con suficientes intentos.
  */
-import {
-  createHmac,
-  hkdfSync,
-  randomBytes,
-  randomUUID,
-  timingSafeEqual,
-} from 'node:crypto';
+import { createHmac, hkdfSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import { config } from '../config';
 
-/** Error de un placeholder aun sin implementar. Se traduce a 501 en las rutas. */
-export class NotImplemented extends Error {
-  constructor(what: string) {
-    super(`${what} todavia no esta implementado en este bridge.`);
-    this.name = 'NotImplemented';
-  }
-}
-
 /**
- * Clave de firma de las sesiones.
- *
- * Si el cliente no configura AUTH_SECRET se deriva del BRIDGE_TOKEN con HKDF y
- * un `info` propio, para que la clave de firma NO sea el mismo secreto que
- * viaja en cada peticion en la cabecera x-bridge-token: si ese token se filtra
- * en un log o un proxy, el atacante todavia no puede fabricar sesiones.
+ * Clave de firma. Sin AUTH_SECRET se deriva del BRIDGE_TOKEN con HKDF, para que
+ * no sea el mismo secreto que viaja en cada peticion: si ese se filtra en un log
+ * o un proxy, todavia no se pueden fabricar sesiones.
  */
 const signingKey: Buffer = (() => {
   const material = config.auth.secret ?? config.bridgeToken;
@@ -49,8 +29,6 @@ export function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a, 'utf8');
   const right = Buffer.from(b, 'utf8');
   if (left.length !== right.length) {
-    // Se compara igualmente contra si mismo para no acortar el tiempo de
-    // respuesta cuando las longitudes difieren.
     timingSafeEqual(left, left);
     return false;
   }
@@ -58,22 +36,15 @@ export function safeEqual(a: string, b: string): boolean {
 }
 
 export interface SessionClaims {
-  /** Usuario que inicio sesion (tal y como lo devolvio la base). */
   sub: string;
-  /** Identificador unico de la sesion. Sirve para trazar en los logs. */
   jti: string;
-  /** Emision y expiracion, en segundos epoch. */
   iat: number;
   exp: number;
 }
 
 /**
- * Token de sesion propio en vez de JWT.
- *
- * Un JWT trae consigo la familia de fallos de `alg` (alg=none, confusion
- * HMAC/RSA) y una libreria mas que auditar. Aqui el formato es fijo,
- * `v1.<payload>.<hmac>`, con un unico algoritmo posible: no hay nada que
- * negociar y por tanto nada que confundir.
+ * Token propio en vez de JWT: formato fijo `v1.<payload>.<hmac>` con un unico
+ * algoritmo posible, asi que no hay `alg` que confundir ni libreria que auditar.
  */
 export function signSession(username: string): { token: string; claims: SessionClaims } {
   const now = Math.floor(Date.now() / 1000);
@@ -111,76 +82,153 @@ export function verifySession(token: string): SessionResult {
     return { ok: false, reason: 'malformed' };
   }
 
-  if (
-    typeof claims?.sub !== 'string' ||
-    typeof claims?.exp !== 'number' ||
-    claims.sub.length === 0
-  ) {
+  if (typeof claims?.sub !== 'string' || typeof claims?.exp !== 'number' || !claims.sub) {
     return { ok: false, reason: 'malformed' };
   }
-
   if (Math.floor(Date.now() / 1000) >= claims.exp) return { ok: false, reason: 'expired' };
 
   return { ok: true, claims };
 }
 
 /* -------------------------------------------------------------------------- */
-/*  PLACEHOLDER: descifrado de la credencial almacenada                        */
+/*  SEG_USUARIOS.Password                                                      */
 /* -------------------------------------------------------------------------- */
 
 /**
- * PLACEHOLDER — pendiente de la especificacion del cliente.
- *
- * La contrasena del usuario esta CIFRADA en la base (no hasheada), asi que hay
- * que descifrarla para compararla. Cuando se conozca el esquema real, esto es
- * lo unico que hay que rellenar:
- *
- *   - Algoritmo y modo (p.ej. AES-256-CBC, AES-256-GCM, o EncryptByKey de SQL
- *     Server resuelto en la propia base con DecryptByKey).
- *   - De donde sale la clave: AUTH_CREDENTIAL_KEY en la configuracion del
- *     cliente, nunca incrustada en el codigo fuente.
- *   - Codificacion del ciphertext en la columna (base64, hex, varbinary...) y
- *     donde viaja el IV.
- *
- * Esquema de la implementacion esperada (AES-256-GCM, IV||tag||ciphertext):
- *
- *   const key = Buffer.from(required('AUTH_CREDENTIAL_KEY'), 'base64');
- *   const raw = Buffer.from(stored, 'base64');
- *   const iv  = raw.subarray(0, 12);
- *   const tag = raw.subarray(12, 28);
- *   const decipher = createDecipheriv('aes-256-gcm', key, iv);
- *   decipher.setAuthTag(tag);
- *   return Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString('utf8');
- *
- * Si el cifrado vive dentro de SQL Server (DecryptByKey / DecryptByPassPhrase),
- * lo correcto es que el descifrado ocurra en el stored procedure y que el
- * bridge nunca vea el ciphertext: en ese caso este hueco desaparece y solo
- * queda `verifyPassword` comparando lo que devuelva el SP.
+ * OJO: esto es ofuscacion, no cifrado. La columna guarda el "empaquetador de
+ * claves" de FoxPro, un desplazamiento reversible cuyo unico secreto es el
+ * propio algoritmo. No se puede cambiar sin tocar el ERP, que escribe esa misma
+ * columna. La defensa real es que el usuario de SQL del bridge no puede leer
+ * SEG_USUARIOS, solo ejecutar el SP.
  */
-export function decryptStoredSecret(_stored: string): string {
-  throw new NotImplemented('El descifrado de la credencial almacenada');
+
+/**
+ * Windows-1252, tramo 0x80-0x9F: los unicos bytes en los que difiere de
+ * ISO-8859-1, y justo donde caen las contrasenas cifradas ('admin' produce los
+ * bytes 175 169 172 162 158). Como la columna es varchar, el driver la entrega
+ * ya decodificada a texto y sin esta tabla el byte 0x9E se leeria como 382.
+ */
+const CP1252_HIGH: readonly number[] = [
+  0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021,
+  0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008d, 0x017d, 0x008f,
+  0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
+  0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
+];
+
+const CP1252_REVERSE: ReadonlyMap<number, number> = new Map(
+  CP1252_HIGH.map((codePoint, offset) => [codePoint, 0x80 + offset]),
+);
+
+export class InvalidStoredSecret extends Error {
+  constructor(reason: string) {
+    super(`Credencial almacenada ilegible: ${reason}`);
+    this.name = 'InvalidStoredSecret';
+  }
+}
+
+/** Texto -> bytes, deshaciendo la decodificacion del driver. */
+function textToBytes(value: string): Buffer {
+  const bytes = Buffer.alloc(value.length);
+
+  for (let i = 0; i < value.length; i += 1) {
+    const codePoint = value.charCodeAt(i);
+
+    if (codePoint <= 0xff) {
+      bytes[i] = codePoint;
+      continue;
+    }
+
+    const mapped =
+      config.auth.passwordEncoding === 'cp1252' ? CP1252_REVERSE.get(codePoint) : undefined;
+
+    if (mapped === undefined) {
+      throw new InvalidStoredSecret(
+        `caracter fuera de la pagina de codigos en la posicion ${i}`,
+      );
+    }
+
+    bytes[i] = mapped;
+  }
+
+  return bytes;
+}
+
+/** Con el SP envoltorio que devuelve varbinary llega un Buffer y no hay conversion. */
+function toBytes(stored: string | Buffer): Buffer {
+  return Buffer.isBuffer(stored) ? stored : textToBytes(stored);
 }
 
 /**
- * PLACEHOLDER — comparacion de la contrasena introducida con la almacenada.
- *
- * Se deja como funcion aparte a proposito: cuando el cliente entregue el
- * esquema, puede que no haga falta descifrar nada (si la base guarda un hash
- * bcrypt/PBKDF2, lo correcto es verificar el hash y NO descifrar). Solo cambia
- * el cuerpo de esta funcion.
- *
- * Sea cual sea el esquema, la comparacion final debe hacerse con `safeEqual`.
+ * Quita el relleno de la derecha por si la columna fuese CHAR. Hay que hacerlo
+ * antes de descifrar: la posicion de cada byte entra en la cuenta, asi que un
+ * espacio de mas desplaza el resultado entero.
  */
-export function verifyPassword(_plain: string, _stored: string): boolean {
-  throw new NotImplemented('La verificacion de contrasena');
+function trimPadding(bytes: Buffer): Buffer {
+  let end = bytes.length;
+  while (end > 0 && (bytes[end - 1] === 0x20 || bytes[end - 1] === 0x00)) end -= 1;
+  return bytes.subarray(0, end);
 }
 
 /**
- * Trabajo simulado para el caso "usuario no existe".
+ * "Desempaquetador de Claves V.5" de FoxPro. El original recorre el texto del
+ * final al principio restando 60 mas la distancia al final; como concatena en
+ * ese mismo orden, equivale a esto en terminos de la posicion de salida j:
  *
- * Sin esto, un login con usuario inexistente responde notablemente antes que
- * uno con usuario valido y contrasena mala, y eso permite enumerar usuarios
- * validos solo cronometrando. Se quema un tiempo comparable al del camino real.
+ *     salida[j] = cifrado[L-j+1] - 60 - j
+ */
+function unpackFoxProSecret(bytes: Buffer): Buffer {
+  const length = bytes.length;
+  const plain = Buffer.alloc(length);
+
+  for (let j = 1; j <= length; j += 1) {
+    const code = bytes[length - j] - 60 - j;
+
+    // Fuera de rango = la columna no la produjo este algoritmo. Es un fallo de
+    // configuracion, no un login fallido, y se distingue para que se vea.
+    if (code < 0 || code > 0xff) {
+      throw new InvalidStoredSecret(
+        `byte fuera de rango en la posicion ${j} de ${length}; revisa la columna y AUTH_PASSWORD_ENCODING`,
+      );
+    }
+
+    plain[j - 1] = code;
+  }
+
+  return plain;
+}
+
+/** Uso interno. No registrar ni devolver nunca el resultado. */
+export function decryptStoredSecret(stored: string | Buffer): string {
+  return unpackFoxProSecret(trimPadding(toBytes(stored))).toString('latin1');
+}
+
+/**
+ * Compara en bytes y en tiempo constante. En bytes porque los dos lados vienen
+ * de codificaciones distintas y normalizar a texto invitaria a dar por iguales
+ * dos secuencias que no lo son.
+ */
+export function verifyPassword(plain: string, stored: string | Buffer): boolean {
+  const expected = unpackFoxProSecret(trimPadding(toBytes(stored)));
+
+  let received: Buffer;
+  try {
+    received = textToBytes(plain);
+  } catch {
+    burnVerificationTime();
+    return false;
+  }
+
+  if (received.length !== expected.length) {
+    burnVerificationTime();
+    return false;
+  }
+
+  return timingSafeEqual(received, expected);
+}
+
+/**
+ * Trabajo simulado para el caso "sin fila". Sin esto ese camino responde antes
+ * que el real y se pueden enumerar usuarios validos solo cronometrando.
  */
 export function burnVerificationTime(): void {
   const decoy = randomBytes(32).toString('base64');

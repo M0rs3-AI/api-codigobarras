@@ -1,12 +1,9 @@
 /**
- * Login de usuario contra la base del cliente.
+ * POST /auth/login    { usuario, password } -> { token, expiresAt }
+ * GET  /auth/session                        -> revalida sesion y estado
  *
- *   POST /auth/login    { usuario, password } -> { token, expiresAt }
- *   GET  /auth/session                        -> revalida sesion + estado activo
- *
- * Ambas exigen ademas el x-bridge-token: el login NO es una puerta abierta a
- * internet, esta detras de la misma credencial que el resto del bridge. Quien
- * no tenga el token del bridge no puede ni intentar adivinar contrasenas.
+ * Ambas exigen tambien el x-bridge-token: quien no lo tenga no puede ni
+ * intentar adivinar contrasenas.
  */
 import { Request, Response, Router } from 'express';
 import rateLimit from 'express-rate-limit';
@@ -20,12 +17,9 @@ import { AuthError, assertActive, login } from '../services/auth';
 const router = Router();
 
 /**
- * Limite propio y mucho mas estrecho que el de las consultas.
- *
- * El cubo es (usuario, IP): asi ni una IP puede recorrer usuarios, ni un
- * atacante repartido entre muchas IPs puede machacar a un mismo usuario. Los
- * logins correctos no cuentan, para que quien acierta a la primera nunca se
- * quede fuera por culpa de los intentos fallidos de otro.
+ * Cubo por (usuario, IP): ni una IP puede recorrer usuarios, ni un atacante
+ * repartido entre muchas IPs machacar a uno solo. Los aciertos no cuentan, para
+ * que quien acierta a la primera no pague los fallos de otro.
  */
 const loginLimiter = rateLimit({
   windowMs: 60_000,
@@ -60,7 +54,7 @@ router.post('/login', requireBridgeToken, loginLimiter, async (req: Request, res
 
   try {
     const result = await login(usuario, password);
-    // Nunca se registra la contrasena, ni siquiera truncada o hasheada.
+    // Nunca se registra la contrasena, ni truncada ni hasheada.
     console.log(`[auth] login OK usuario=${usuario}`);
     res.json({
       success: true,
@@ -70,13 +64,13 @@ router.post('/login', requireBridgeToken, loginLimiter, async (req: Request, res
     });
   } catch (err) {
     if (err instanceof AuthError) {
-      if (err.code === 'account_inactive') {
-        res.status(403).json({ success: false, error: 'account_inactive' });
+      if (err.code === 'auth_disabled') {
+        res.status(501).json({ success: false, error: err.code });
         return;
       }
-      if (err.code === 'not_implemented' || err.code === 'auth_disabled') {
-        console.error(`[auth] ${err.code}: ${err.message}`);
-        res.status(501).json({ success: false, error: err.code });
+      if (err.code === 'credential_unreadable') {
+        console.error(`[auth] credencial ilegible usuario=${usuario}: ${err.message}`);
+        res.status(500).json({ success: false, error: 'credential_unreadable' });
         return;
       }
       console.warn(`[auth] login FALLIDO usuario=${usuario}`);
@@ -85,16 +79,13 @@ router.post('/login', requireBridgeToken, loginLimiter, async (req: Request, res
     }
 
     // Fallo de base: no se convierte en "credenciales invalidas", porque la app
-    // borraria las credenciales del dispositivo por una caida pasajera.
+    // borraria lo guardado por una caida pasajera.
     console.error(`[auth] login EXCEPTION usuario=${usuario}: ${(err as Error).message}`);
     res.status(503).json({ success: false, error: 'auth_unavailable' });
   }
 });
 
-/**
- * Revalidacion explicita. La app la usa al arrancar para saber, antes de
- * escanear nada, si debe borrar credenciales y volver a pedir activacion.
- */
+/** La app la usa al arrancar, antes de escanear nada. */
 router.get('/session', requireBridgeToken, async (req: Request, res: Response) => {
   if (!config.auth.enabled) {
     res.status(501).json({ success: false, error: 'auth_disabled' });

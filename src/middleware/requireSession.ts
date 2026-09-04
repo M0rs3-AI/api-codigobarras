@@ -1,12 +1,8 @@
 /**
- * Exige una sesion valida Y que la cuenta siga activa.
+ * Exige sesion valida Y cuenta de alta. Se aplica a cada escaneo.
  *
- * Se aplica a /query y /search, es decir, a cada escaneo. La comprobacion de
- * "activo" no se hace solo al iniciar sesion: una licencia revocada tiene que
- * cortar el servicio en la siguiente consulta, no cuando caduque el token.
- *
- * El codigo `account_inactive` es el que la app usa para borrar del dispositivo
- * las credenciales y la clave de activacion.
+ * `account_inactive` es el codigo con el que la app borra del dispositivo las
+ * credenciales y la clave de activacion.
  */
 import { NextFunction, Request, Response } from 'express';
 
@@ -16,7 +12,6 @@ import { AuthError, assertActive } from '../services/auth';
 
 declare module 'express-serve-static-core' {
   interface Request {
-    /** Usuario de la sesion. Solo presente cuando AUTH_ENABLED es true. */
     sessionUser?: string;
   }
 }
@@ -24,7 +19,7 @@ declare module 'express-serve-static-core' {
 function bearer(req: Request): string | null {
   const header = req.headers.authorization;
   const value = Array.isArray(header) ? header[0] : header;
-  if (!value || !value.startsWith('Bearer ')) return null;
+  if (!value?.startsWith('Bearer ')) return null;
   const token = value.slice(7).trim();
   return token.length > 0 ? token : null;
 }
@@ -34,8 +29,7 @@ export async function requireSession(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  // Bridge sin login habilitado: se mantiene el comportamiento anterior, donde
-  // el x-bridge-token era la unica credencial.
+  // Sin login habilitado, el x-bridge-token sigue siendo la unica credencial.
   if (!config.auth.enabled) {
     next();
     return;
@@ -63,7 +57,7 @@ export async function requireSession(
       res.status(403).json({ success: false, error: 'account_inactive' });
       return;
     }
-    // Base caida: no es motivo para desactivar a nadie. 503 y la app reintenta.
+    // Base caida: no es motivo para desactivar a nadie.
     console.error(`[auth] no se pudo verificar el estado: ${(err as Error).message}`);
     res.status(503).json({ success: false, error: 'auth_check_unavailable' });
     return;

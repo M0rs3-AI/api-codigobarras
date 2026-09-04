@@ -1,156 +1,116 @@
 /*
-  Usuarios de la app y estado de licencia (PLANTILLA / PLACEHOLDER).
+  Login de usuario contra SEG_USUARIOS (OPCIONAL).
 
-  QUE ES ESTO
-  -----------
-  El bridge necesita responder dos preguntas contra la base del cliente:
+  Habilita AUTH_ENABLED: la app pide usuario y contrasena ademas de la clave de
+  activacion, y cada escaneo revalida que la cuenta siga de alta.
 
-    1. login:   dado un usuario, traer su credencial cifrada y si esta activo.
-    2. escaneo: dado un usuario, decir si SIGUE activo. Se pregunta en CADA
-                consulta, para que revocar una cuenta corte el servicio en el
-                acto y no cuando caduque la sesion.
+  A DIFERENCIA DE 01 Y 02, AQUI NO SE CREA NADA NUEVO.
+  ---------------------------------------------------
+  El ERP del cliente ya trae lo necesario:
 
-  Este archivo es una PLANTILLA: el cliente todavia no ha entregado ni el nombre
-  real de la tabla, ni sus columnas, ni el esquema de cifrado de la credencial.
-  Ajusta los nombres aqui y refleja el mismo cambio en:
+      CREATE PROCEDURE [dbo].[SEG_Usuarios_Select_Password] @Codigo varchar(15) AS
+      SELECT Password FROM SEG_USUARIOS WITH(NoLock)
+      WHERE Codigo = @Codigo and Anulado = 0
 
-      src/lib/db.ts             -> interface UsuariosTable / Database
-      src/repositories/users.ts -> las dos consultas
+  Ese SP resuelve las dos preguntas del bridge de una vez:
 
-  POR QUE STORED PROCEDURES Y NO SELECT DIRECTO
-  ---------------------------------------------
-  El usuario del bridge tiene DENY SELECT sobre todo el esquema (ver
-  01-usuario-minimo-privilegio.sql). Ese DENY es justamente lo que hace que
-  comprometer el bridge no signifique comprometer la base: sin el, quien tome el
-  control del proceso puede leer -o cifrar y pedir rescate por- lo que ese
-  usuario alcance.
+    - devuelve fila  -> el usuario existe Y esta de alta (Anulado = 0)
+    - no devuelve    -> no existe, o esta dado de baja
 
-  Dar GRANT SELECT sobre la tabla de usuarios para el login abriria un agujero en
-  esa politica, y ademas seria SELECT sobre la tabla que contiene credenciales.
-  Con dos procedimientos y GRANT EXECUTE sobre ellos, el bridge sigue sin poder
-  leer una sola tabla por su cuenta.
+  Por eso el unico paso obligatorio de este archivo es el GRANT del punto 1.
+  Los puntos 2 y 3 son mejoras opcionales.
 
-  Si eliges esta via (recomendada), cambia las consultas de
-  src/repositories/users.ts por las llamadas parametrizadas que ese archivo deja
-  documentadas.
+  DAR DE BAJA A UN USUARIO
+  ------------------------
+      UPDATE dbo.SEG_USUARIOS SET Anulado = 1 WHERE Codigo = '<usuario>';
+
+  Surte efecto en el siguiente escaneo del dispositivo (como mucho tras
+  AUTH_STATUS_CACHE_SECONDS segundos, 15 por defecto). La app borra entonces la
+  sesion, el usuario, la contrasena y la clave de activacion del telefono.
 */
 
 USE [<NOMBRE_BASE_DATOS>];
 GO
 
 /* ---------------------------------------------------------------------------
-   1. Tabla de usuarios de la app. PLACEHOLDER: si el cliente ya tiene la suya,
-      BORRA este bloque y apunta los procedimientos de abajo a la tabla real.
+   1. OBLIGATORIO. Unico permiso que necesita el login.
+
+      El usuario del bridge sigue con DENY SELECT sobre todo el esquema (ver
+      01-usuario-minimo-privilegio.sql): NO puede leer SEG_USUARIOS ni ninguna
+      otra tabla, solo ejecutar este procedimiento. Eso es lo que hace que
+      comprometer el bridge no sirva para leer -ni cifrar y pedir rescate por-
+      la base del cliente.
    --------------------------------------------------------------------------- */
 
-IF OBJECT_ID('dbo.BIZOR_APP_USUARIOS', 'U') IS NULL
-BEGIN
-    CREATE TABLE dbo.BIZOR_APP_USUARIOS
-    (
-        id       uniqueidentifier NOT NULL CONSTRAINT DF_BIZOR_APP_USUARIOS_id     DEFAULT NEWID(),
-        usuario  varchar(64)      NOT NULL,
-        -- Credencial CIFRADA. No es un hash: el cliente indica que se descifra
-        -- para compararla. Ver el placeholder decryptStoredSecret en
-        -- src/lib/crypto.ts.
-        --
-        -- Lo ideal es que el descifrado ocurra AQUI DENTRO (DecryptByKey), para
-        -- que ni el ciphertext ni la clave salgan nunca de SQL Server. Si se
-        -- hace asi, el SP de login no debe devolver la credencial: recibe la
-        -- contrasena y devuelve solo un booleano (ver bloque 2-bis).
-        password varbinary(max)   NOT NULL,
-        activo   bit              NOT NULL CONSTRAINT DF_BIZOR_APP_USUARIOS_activo DEFAULT 1,
-        creado   datetime2(0)     NOT NULL CONSTRAINT DF_BIZOR_APP_USUARIOS_creado DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT PK_BIZOR_APP_USUARIOS PRIMARY KEY CLUSTERED (id),
-        CONSTRAINT UQ_BIZOR_APP_USUARIOS_usuario UNIQUE (usuario)
-    );
-END
+GRANT EXECUTE ON OBJECT::[dbo].[SEG_Usuarios_Select_Password] TO [bridge_codigobarras];
 GO
 
 /* ---------------------------------------------------------------------------
-   2. SP de login. Devuelve como mucho UNA fila.
+   2. OPCIONAL (recomendado): SP de estado.
+
+      El bridge comprueba en CADA escaneo si la cuenta sigue de alta. Sin este
+      procedimiento reutiliza el de login, que funciona pero arrastra la
+      contrasena cifrada por la red cientos de veces al dia sin necesidad.
+
+      Este devuelve un 1 y nada mas. Configurar despues:
+          AUTH_SP_STATUS_NAME=dbo.SEG_Usuarios_Activo
    --------------------------------------------------------------------------- */
 
-CREATE OR ALTER PROCEDURE [dbo].[BIZOR_App_Usuario_Login]
-    @usuario varchar(64)
+CREATE OR ALTER PROCEDURE [dbo].[SEG_Usuarios_Activo]
+    @Código varchar(15)
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    -- El bridge ya acota la entrada, pero el SP no confia en quien lo llama.
-    IF @usuario IS NULL OR LEN(LTRIM(RTRIM(@usuario))) = 0 RETURN;
-
-    SET @usuario = LTRIM(RTRIM(@usuario));
-
-    SELECT TOP (1)
-           id       = CONVERT(varchar(36), U.id),
-           usuario  = U.usuario,
-           -- PLACEHOLDER: la credencial tal y como la espere el bridge.
-           password = CONVERT(varchar(max), U.password),
-           activo   = U.activo
-    FROM   dbo.BIZOR_APP_USUARIOS U WITH (NOLOCK)
-    WHERE  U.usuario = @usuario;
+    SELECT TOP (1) Activo = CONVERT(bit, 1)
+    FROM   dbo.SEG_USUARIOS WITH (NOLOCK)
+    WHERE  Código = @Código
+      AND  Anulado = 0;
 END
 GO
 
-/* ---------------------------------------------------------------------------
-   2-bis. ALTERNATIVA RECOMENDADA: verificar dentro de la base.
-
-   Con esta version la credencial cifrada NUNCA sale de SQL Server y el bridge
-   no necesita conocer ni el algoritmo ni la clave. Descomenta y adapta cuando
-   el cliente entregue el esquema de cifrado.
-
-   CREATE OR ALTER PROCEDURE [dbo].[BIZOR_App_Usuario_Verificar]
-       @usuario  varchar(64),
-       @password nvarchar(128)
-   AS
-   BEGIN
-       SET NOCOUNT ON;
-
-       OPEN SYMMETRIC KEY <NOMBRE_CLAVE> DECRYPTION BY CERTIFICATE <NOMBRE_CERT>;
-
-       SELECT TOP (1)
-              usuario = U.usuario,
-              activo  = U.activo,
-              valido  = CASE
-                          WHEN CONVERT(nvarchar(128), DecryptByKey(U.password)) = @password
-                          THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0)
-                        END
-       FROM   dbo.BIZOR_APP_USUARIOS U
-       WHERE  U.usuario = @usuario;
-
-       CLOSE SYMMETRIC KEY <NOMBRE_CLAVE>;
-   END
-   GO
-   --------------------------------------------------------------------------- */
+GRANT EXECUTE ON OBJECT::[dbo].[SEG_Usuarios_Activo] TO [bridge_codigobarras];
+GO
 
 /* ---------------------------------------------------------------------------
-   3. SP de estado. Se llama en CADA escaneo, asi que es deliberadamente lo mas
-      barato posible: un booleano y nada mas. En particular NO devuelve la
-      credencial: no hay razon para pasearla por la red cientos de veces al dia.
+   3. OPCIONAL: envoltorio que devuelve la contrasena como varbinary.
+
+      POR QUE PUEDE HACER FALTA
+      -------------------------
+      La contrasena cifrada cae siempre en bytes altos: una clave de 5-10
+      caracteres produce bytes ~155-200 (p.ej. 'admin' -> 175 169 172 162 158).
+      Como la columna es varchar, el driver la entrega ya convertida a texto
+      segun la pagina de codigos de la intercalacion, y el tramo 0x80-0x9F es
+      justamente donde CP1252 e ISO-8859-1 no coinciden.
+
+      El bridge lo resuelve por su cuenta asumiendo CP1252 (lo normal en
+      intercalaciones latinas) y permite cambiarlo con AUTH_PASSWORD_ENCODING.
+      Pero si la instalacion usa otra pagina de codigos, o si prefieres no
+      depender de ese detalle, este envoltorio entrega los bytes crudos y el
+      problema desaparece: el bridge detecta el varbinary y se salta la
+      conversion de texto.
+
+      Configurar despues:
+          AUTH_SP_LOGIN_NAME=dbo.SEG_Usuarios_Select_Password_Bin
+
+      SINTOMA DE QUE HACE FALTA: el login falla siempre con credenciales
+      correctas y en el log del bridge aparece "credencial ilegible".
    --------------------------------------------------------------------------- */
 
-CREATE OR ALTER PROCEDURE [dbo].[BIZOR_App_Usuario_Estado]
-    @usuario varchar(64)
+CREATE OR ALTER PROCEDURE [dbo].[SEG_Usuarios_Select_Password_Bin]
+    @Código varchar(15)
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    IF @usuario IS NULL OR LEN(LTRIM(RTRIM(@usuario))) = 0 RETURN;
-
-    SELECT TOP (1) activo = U.activo
-    FROM   dbo.BIZOR_APP_USUARIOS U WITH (NOLOCK)
-    WHERE  U.usuario = LTRIM(RTRIM(@usuario));
+    SELECT TOP (1) Password = CONVERT(varbinary(max), Password)
+    FROM   dbo.SEG_USUARIOS WITH (NOLOCK)
+    WHERE  Código = @Código
+      AND  Anulado = 0;
 END
 GO
 
-/* ---------------------------------------------------------------------------
-   4. Permisos. Solo EXECUTE sobre estos dos procedimientos: el usuario del
-      bridge sigue sin poder leer la tabla directamente.
-   --------------------------------------------------------------------------- */
-
-GRANT EXECUTE ON OBJECT::[dbo].[BIZOR_App_Usuario_Login]  TO [bridge_codigobarras];
-GO
-GRANT EXECUTE ON OBJECT::[dbo].[BIZOR_App_Usuario_Estado] TO [bridge_codigobarras];
+GRANT EXECUTE ON OBJECT::[dbo].[SEG_Usuarios_Select_Password_Bin] TO [bridge_codigobarras];
 GO
 
 /*
@@ -158,16 +118,21 @@ GO
   ------------
   Conectado COMO bridge_codigobarras:
 
-      EXEC dbo.BIZOR_App_Usuario_Estado @usuario = 'demo';   -- debe funcionar
-      SELECT TOP 1 * FROM dbo.BIZOR_APP_USUARIOS;            -- debe FALLAR
+      EXEC dbo.SEG_Usuarios_Select_Password '<usuario>';   -- debe funcionar
+      SELECT TOP 1 * FROM dbo.SEG_USUARIOS;                -- debe FALLAR
 
-  Si el SELECT funciona, el usuario tiene mas permisos de los que deberia.
+  Si el SELECT funciona, el usuario tiene mas permisos de los que deberia:
+  revisa a que roles pertenece (hay una consulta al final de 01).
 
-  DAR DE BAJA A UN USUARIO
-  ------------------------
-      UPDATE dbo.BIZOR_APP_USUARIOS SET activo = 0 WHERE usuario = '<usuario>';
+  SOBRE LA FUERZA DEL CIFRADO DE Password
+  ---------------------------------------
+  La columna no guarda un hash: guarda el "empaquetador de claves" de FoxPro, un
+  desplazamiento reversible cuyo unico secreto es el algoritmo. Quien consiga
+  leer esa columna recupera las contrasenas en claro sin esfuerzo.
 
-  Surte efecto en la siguiente consulta del dispositivo (como mucho tras
-  AUTH_STATUS_CACHE_SECONDS segundos, 15 por defecto). La app borra entonces sus
-  credenciales guardadas y la clave de activacion.
+  No se puede cambiar sin tocar el ERP -el FoxPro escribe esa misma columna-,
+  asi que la defensa real esta en los permisos: el GRANT del punto 1 es lo unico
+  que este usuario puede hacer, y sin SELECT sobre SEG_USUARIOS la columna nunca
+  queda expuesta. Por eso NO conviene "simplificar" dando db_datareader al
+  usuario del bridge.
 */

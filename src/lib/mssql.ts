@@ -103,6 +103,48 @@ export function callSearchProcedure(
   ]);
 }
 
+/**
+ * Ejecuta un SP pasandole un unico argumento por POSICION.
+ *
+ * Se usa para los SP del ERP, cuyo parametro se llama `@Código`: con tilde y
+ * dependiente de la intercalacion. Por posicion no hay que nombrarlo. El nombre
+ * del SP si va en el texto -no hay otra forma de invocarlo- pero sale de la
+ * configuracion incrustada en el binario y se valida al arrancar (config.ts).
+ */
+export async function callProcedurePositional(
+  spName: string,
+  value: string,
+): Promise<Record<string, unknown>[]> {
+  const entry = await acquire();
+  let failed = false;
+
+  try {
+    return await new Promise<Record<string, unknown>[]>((resolve, reject) => {
+      const rows: Record<string, unknown>[] = [];
+
+      const request = new Request(`EXEC ${spName} @p1`, (err) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
+
+      request.addParameter('p1', TYPES.NVarChar, value);
+
+      request.on('row', (columns: Array<{ metadata: { colName: string }; value: unknown }>) => {
+        const row: Record<string, unknown> = {};
+        for (const column of columns) row[column.metadata.colName] = column.value;
+        rows.push(row);
+      });
+
+      entry.connection.execSql(request);
+    });
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    release(entry, failed);
+  }
+}
+
 /** Comprobacion de vida real contra la base, para /health?deep=1. */
 export async function ping(): Promise<void> {
   const entry = await acquire();

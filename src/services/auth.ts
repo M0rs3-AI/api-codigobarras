@@ -1,27 +1,19 @@
 /**
- * Reglas de autenticacion y de licencia activa.
+ * Login y comprobacion de licencia activa.
  *
- * Dos operaciones:
- *   - login(usuario, password) -> token de sesion firmado.
- *   - assertActive(usuario)    -> se ejecuta en CADA consulta; si la cuenta deja
- *                                 de estar activa, la app debe borrar sus
- *                                 credenciales y su clave de activacion.
+ * `assertActive` corre en CADA consulta: revocar un usuario tiene que cortar el
+ * servicio en su siguiente escaneo, no cuando caduque la sesion.
  */
-import {
-  burnVerificationTime,
-  NotImplemented,
-  signSession,
-  verifyPassword,
-} from '../lib/crypto';
+import { burnVerificationTime, InvalidStoredSecret, signSession, verifyPassword } from '../lib/crypto';
 import { config } from '../config';
-import { findUserByUsername, isUserActive } from '../repositories/users';
+import { findUserSecret, isUserActive } from '../repositories/users';
 
-/** Motivos por los que se rechaza. El codigo es el que interpreta la app. */
 export type AuthFailure =
   | 'invalid_credentials'
   | 'account_inactive'
   | 'auth_disabled'
-  | 'not_implemented';
+  /** La columna Password no se pudo descifrar: fallo de configuracion. */
+  | 'credential_unreadable';
 
 export class AuthError extends Error {
   constructor(
@@ -33,14 +25,10 @@ export class AuthError extends Error {
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Cache de estado activo                                                     */
-/* -------------------------------------------------------------------------- */
-
 /**
  * Solo se cachean los SI. Un usuario dado de baja deja de funcionar en la
- * siguiente peticion, sin esperar a que expire nada; lo unico que la cache
- * evita es que una rafaga de escaneos consulte la base una vez por codigo.
+ * siguiente peticion; la cache unicamente evita que una rafaga de escaneos
+ * consulte la base una vez por codigo.
  */
 const activeUntil = new Map<string, number>();
 
@@ -57,22 +45,15 @@ function cachedActive(usuario: string): boolean {
 function rememberActive(usuario: string): void {
   if (config.auth.statusCacheSeconds <= 0) return;
   activeUntil.set(usuario, Date.now() + config.auth.statusCacheSeconds * 1000);
-  // Poda barata: la app de un cliente tiene decenas de usuarios, no miles, pero
-  // no dejamos que el mapa crezca sin techo si alguien inventa usuarios.
   if (activeUntil.size > 1000) {
     const now = Date.now();
     for (const [key, value] of activeUntil) if (now >= value) activeUntil.delete(key);
   }
 }
 
-/** Invalida la cache de un usuario. Se llama en cuanto la base dice que no. */
 export function forgetUser(usuario: string): void {
   activeUntil.delete(usuario);
 }
-
-/* -------------------------------------------------------------------------- */
-/*  Operaciones                                                                */
-/* -------------------------------------------------------------------------- */
 
 export interface LoginResult {
   token: string;
@@ -81,69 +62,55 @@ export interface LoginResult {
 }
 
 /**
- * Valida usuario y contrasena contra la base del cliente.
+ * Valida contra SEG_USUARIOS.
  *
- * El mensaje de error es el MISMO tanto si el usuario no existe como si la
- * contrasena es incorrecta, y el camino "usuario no existe" quema un tiempo
- * comparable al camino real: de otro modo el endpoint sirve para enumerar que
- * usuarios existen en la empresa del cliente.
- *
- * La cuenta inactiva SI se distingue (403 account_inactive) porque la app tiene
- * que reaccionar borrando credenciales, y para llegar ahi ya hubo que acertar
- * la contrasena: no filtra nada a quien no la sepa.
+ * Mismo error para los tres casos que un atacante querria distinguir -usuario
+ * inexistente, dado de baja y contrasena incorrecta-, y el camino "sin fila"
+ * quema un tiempo comparable al real. La baja se nota igualmente en el escaneo,
+ * via `assertActive`.
  */
 export async function login(usuario: string, password: string): Promise<LoginResult> {
   if (!config.auth.enabled) {
     throw new AuthError('auth_disabled', 'El login no esta habilitado en este bridge.');
   }
 
-  const user = await findUserByUsername(usuario);
+  const stored = await findUserSecret(usuario);
 
-  if (!user) {
+  if (stored === null) {
     burnVerificationTime();
     throw new AuthError('invalid_credentials', 'Usuario o contrasena incorrectos.');
   }
 
   let ok: boolean;
   try {
-    ok = verifyPassword(password, user.storedSecret);
+    ok = verifyPassword(password, stored);
   } catch (err) {
-    if (err instanceof NotImplemented) {
-      throw new AuthError('not_implemented', err.message);
+    if (err instanceof InvalidStoredSecret) {
+      throw new AuthError('credential_unreadable', err.message);
     }
     throw err;
   }
 
-  if (!ok) {
-    throw new AuthError('invalid_credentials', 'Usuario o contrasena incorrectos.');
-  }
+  if (!ok) throw new AuthError('invalid_credentials', 'Usuario o contrasena incorrectos.');
 
-  if (!user.activo) {
-    forgetUser(user.usuario);
-    throw new AuthError('account_inactive', 'La cuenta no esta activa.');
-  }
+  const { token, claims } = signSession(usuario);
+  rememberActive(usuario);
 
-  const { token, claims } = signSession(user.usuario);
-  rememberActive(user.usuario);
-
-  return { token, usuario: user.usuario, expiresAt: claims.exp };
+  return { token, usuario, expiresAt: claims.exp };
 }
 
 /**
- * Comprobacion de licencia por peticion. Lanza AuthError('account_inactive') si
- * el usuario ya no esta activo o ya no existe.
+ * Lanza AuthError('account_inactive') si el usuario ya no esta de alta.
  *
- * Un fallo de conexion a la base NO se traduce en "inactivo": eso borraria las
- * credenciales de todos los dispositivos cada vez que el servidor del cliente
- * se reinicia. Se propaga como error para que la ruta responda 503.
+ * Un fallo de conexion NO es "inactivo": eso borraria las credenciales de toda
+ * la tienda cada vez que se reinicia el servidor. Se propaga como 503.
  */
 export async function assertActive(usuario: string): Promise<void> {
   if (!config.auth.enabled) return;
   if (cachedActive(usuario)) return;
 
-  const activo = await isUserActive(usuario);
-
-  if (activo === null || activo === false) {
+  // false cubre "Anulado = 1" y "ya no existe": para la app significan lo mismo.
+  if (!(await isUserActive(usuario))) {
     forgetUser(usuario);
     throw new AuthError('account_inactive', 'La cuenta no esta activa.');
   }

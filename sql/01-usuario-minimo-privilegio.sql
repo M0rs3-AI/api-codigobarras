@@ -57,10 +57,9 @@ GO
 -- GO
 
 -- Solo si el cliente usa login de usuario (AUTH_ENABLED). Ver 03-auth-usuarios.sql,
--- que ya incluye estos GRANT; se repiten aqui para tener el inventario completo
--- de permisos del bridge en un solo sitio.
--- GRANT EXECUTE ON OBJECT::[dbo].[BIZOR_App_Usuario_Login]  TO [bridge_codigobarras];
--- GRANT EXECUTE ON OBJECT::[dbo].[BIZOR_App_Usuario_Estado] TO [bridge_codigobarras];
+-- que ya incluye este GRANT; se repite aqui para tener el inventario completo de
+-- permisos del bridge en un solo sitio. El SP ya existe en el ERP.
+-- GRANT EXECUTE ON OBJECT::[dbo].[SEG_Usuarios_Select_Password] TO [bridge_codigobarras];
 -- GO
 
 /*
