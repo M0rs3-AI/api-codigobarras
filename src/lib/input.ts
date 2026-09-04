@@ -66,3 +66,43 @@ export function readLimit(body: unknown): number {
   if (!Number.isFinite(requested) || requested < 1) return max;
   return Math.min(requested, max);
 }
+
+/**
+ * Credenciales de login.
+ *
+ * Se acotan longitudes ANTES de tocar la base: una contrasena de 10 MB no es un
+ * intento de login, es un intento de gastar CPU del servidor del cliente. El
+ * usuario se recorta y se pasa a minusculas para que "Juan" y "juan" no creen
+ * dos cubos de rate limit distintos; la contrasena NO se toca (los espacios y
+ * los caracteres de control pueden ser parte legitima de la contrasena).
+ */
+export interface Credentials {
+  usuario: string;
+  password: string;
+}
+
+export function readCredentials(body: unknown): Credentials {
+  const source = body as { usuario?: unknown; password?: unknown } | null;
+
+  if (typeof source?.usuario !== 'string' || typeof source?.password !== 'string') {
+    throw new InvalidInput('Se requieren los campos "usuario" y "password".');
+  }
+
+  const usuario = sanitize(source.usuario).toLowerCase();
+  const password = source.password;
+
+  if (usuario.length === 0) {
+    throw new InvalidInput('El campo "usuario" no puede estar vacio.');
+  }
+  if (usuario.length > config.auth.maxUsernameLength) {
+    throw new InvalidInput(`El campo "usuario" supera ${config.auth.maxUsernameLength} caracteres.`);
+  }
+  if (password.length === 0) {
+    throw new InvalidInput('El campo "password" no puede estar vacio.');
+  }
+  if (password.length > config.auth.maxPasswordLength) {
+    throw new InvalidInput(`El campo "password" supera ${config.auth.maxPasswordLength} caracteres.`);
+  }
+
+  return { usuario, password };
+}

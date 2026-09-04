@@ -3,10 +3,11 @@ import { Request, Response, Router } from 'express';
 import { InvalidInput, readBarcode } from '../lib/input';
 import { callBarcodeProcedure, callStockProcedure } from '../lib/mssql';
 import { requireBridgeToken } from '../middleware/requireBridgeToken';
+import { requireSession } from '../middleware/requireSession';
 
 const router = Router();
 
-router.post('/', requireBridgeToken, async (req: Request, res: Response) => {
+router.post('/', requireBridgeToken, requireSession, async (req: Request, res: Response) => {
   let barcode: string;
   try {
     barcode = readBarcode(req.body);

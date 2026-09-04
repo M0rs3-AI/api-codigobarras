@@ -139,6 +139,39 @@ export const config = {
   searchSpParamName: optional('SP_SEARCH_PARAM_NAME') ?? 'q',
   searchSpLimitParamName: optional('SP_SEARCH_LIMIT_PARAM_NAME') ?? 'top',
 
+  /**
+   * Login de usuario contra la base del cliente.
+   *
+   * `enabled` arranca en false a proposito: mientras el descifrado de la
+   * credencial y la consulta a la base sigan siendo placeholders (ver
+   * lib/crypto.ts y repositories/users.ts), activarlo dejaria el bridge sin
+   * poder responder ninguna consulta. Se pone a true en la configuracion del
+   * cliente en cuanto esas dos piezas esten implementadas.
+   */
+  auth: {
+    enabled: boolean('AUTH_ENABLED', false),
+    /**
+     * Clave de firma de las sesiones. Si falta se deriva del BRIDGE_TOKEN por
+     * HKDF (ver lib/crypto.ts); configurarla aparte es lo recomendable.
+     */
+    secret: optional('AUTH_SECRET'),
+    sessionTtlMinutes: number('AUTH_SESSION_TTL_MINUTES', 720),
+    /**
+     * Segundos que se reutiliza un "usuario activo" ya comprobado.
+     *
+     * La comprobacion se hace en CADA escaneo; esta ventana solo evita que una
+     * rafaga de escaneos seguidos golpee la base una vez por codigo. Un 0
+     * desactiva la cache y consulta siempre. Los resultados negativos
+     * (inactivo, borrado) NUNCA se cachean: dar de baja a alguien surte efecto
+     * de inmediato.
+     */
+    statusCacheSeconds: number('AUTH_STATUS_CACHE_SECONDS', 15),
+    /** Intentos de login por minuto y por (usuario, IP). Deliberadamente bajo. */
+    loginRatePerMinute: number('AUTH_LOGIN_RATE_PER_MINUTE', 10),
+    maxUsernameLength: number('AUTH_MAX_USERNAME_LENGTH', 64),
+    maxPasswordLength: number('AUTH_MAX_PASSWORD_LENGTH', 128),
+  },
+
   limits: {
     /** Topes de entrada. El cliente no decide cuanto trabajo pedirle a la BD. */
     maxBarcodeLength: number('MAX_BARCODE_LENGTH', 64),

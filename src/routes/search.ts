@@ -8,10 +8,11 @@ import { config } from '../config';
 import { InvalidInput, readLimit, readQuery } from '../lib/input';
 import { callSearchProcedure } from '../lib/mssql';
 import { requireBridgeToken } from '../middleware/requireBridgeToken';
+import { requireSession } from '../middleware/requireSession';
 
 const router = Router();
 
-router.post('/', requireBridgeToken, async (req: Request, res: Response) => {
+router.post('/', requireBridgeToken, requireSession, async (req: Request, res: Response) => {
   // Sin SP configurado la busqueda no existe para este cliente. Es 501 y no 503:
   // no hay nada roto, la funcion no esta habilitada. La app lo distingue para
   // ocultar la busqueda por texto en vez de mostrar un error.

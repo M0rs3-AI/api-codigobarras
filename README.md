@@ -89,6 +89,9 @@ Ejecutar en orden, como administrador de SQL Server:
    lo saltes.** Es lo que hace que comprometer el bridge no signifique
    comprometer la base entera.
 2. `sql/02-sp-busqueda.sql` — opcional, habilita `/search`.
+3. `sql/03-auth-usuarios.sql` — opcional, habilita el login de usuario
+   (`AUTH_ENABLED`). Es una plantilla: ajusta los nombres al esquema real del
+   cliente antes de ejecutarla.
 
 ## Endpoints
 
@@ -96,12 +99,73 @@ Ejecutar en orden, como administrador de SQL Server:
 |--------|------|------|-------------|
 | GET | `/health` | no | Sonda. Responde `{"status":"ok"}` y nada mas |
 | GET | `/health/deep` | si | Comprueba la conexion real a SQL Server |
-| POST | `/query` | si | `{ "barcode": "..." }` -> producto + stock |
-| POST | `/search` | si | `{ "q": "...", "limit": 25 }` -> coincidencias |
+| POST | `/auth/login` | si | `{ "usuario", "password" }` -> token de sesion |
+| GET | `/auth/session` | si + sesion | Revalida la sesion y el estado de la cuenta |
+| POST | `/query` | si + sesion | `{ "barcode": "..." }` -> producto + stock |
+| POST | `/search` | si + sesion | `{ "q": "...", "limit": 25 }` -> coincidencias |
 
-Auth: header `x-bridge-token`. Respuestas: `200`, `400` entrada invalida, `401`
-token, `404` no encontrado, `413` body grande, `429` limite, `501` busqueda no
-configurada, `503` base no disponible.
+Auth: header `x-bridge-token` **siempre**; ademas `Authorization: Bearer
+<sesion>` cuando `AUTH_ENABLED=true`. Respuestas: `200`, `400` entrada invalida,
+`401` token/sesion, `403` cuenta inactiva, `404` no encontrado, `413` body
+grande, `429` limite, `501` funcion no configurada, `503` base no disponible.
+
+## Login de usuario y licencia activa
+
+Opcional, controlado por `AUTH_ENABLED`. Cuando esta activo:
+
+1. La app pide **usuario y contrasena** ademas de la clave de activacion.
+2. `POST /auth/login` los valida contra la base del cliente y devuelve un token
+   de sesion firmado (HMAC-SHA256, 12 h por defecto).
+3. **Cada** consulta de `/query` y `/search` vuelve a preguntar a la base si la
+   cuenta sigue activa. No se espera a que caduque la sesion: dar de baja a un
+   usuario corta el servicio en su siguiente escaneo.
+4. Si la cuenta deja de estar activa, el bridge responde `403 account_inactive`
+   y la app **borra del dispositivo la sesion, el usuario, la contrasena y la
+   clave de activacion**.
+
+```
+POST /auth/login          x-bridge-token + { usuario, password }
+  -> 200 { token, expiresAt }
+  -> 401 invalid_credentials      usuario o contrasena mal (mismo error para
+                                  ambos: el endpoint no sirve para saber que
+                                  usuarios existen)
+  -> 403 account_inactive         credenciales correctas, cuenta dada de baja
+  -> 429 too_many_attempts        10 intentos/min por (usuario, IP)
+  -> 503 auth_unavailable         la base no responde -> NO se borra nada
+```
+
+Un fallo de conexion nunca se traduce en "inactivo": si lo hiciera, cada
+reinicio del servidor del cliente desactivaria todos los dispositivos.
+
+### Lo que falta por implementar
+
+Dos piezas dependen del esquema del cliente y estan marcadas como PLACEHOLDER:
+
+| Pieza | Archivo | Que falta |
+|-------|---------|-----------|
+| Descifrado de la credencial | `src/lib/crypto.ts` | Algoritmo, origen de la clave y codificacion de la columna |
+| Consulta a la base | `src/repositories/users.ts` + `src/lib/db.ts` | Nombre real de la tabla y de sus columnas |
+
+`sql/03-auth-usuarios.sql` es la plantilla de la parte de base de datos, con la
+alternativa recomendada: **descifrar dentro de SQL Server** (`DecryptByKey`), de
+forma que ni el ciphertext ni la clave salgan nunca de la base y el bridge solo
+reciba un booleano.
+
+Mientras esos huecos sigan sin rellenar, `AUTH_ENABLED` debe quedarse en
+`false`: con `true` el login responde `501 not_implemented`.
+
+### Consultas tipadas (Kysely)
+
+Las consultas del login se construyen con **Kysely**, no a mano. Las de producto
+siguen llamando a stored procedures con tedious, que es lo correcto alli: no hay
+SQL que construir, solo parametros que pasar tipados.
+
+Donde si hay SQL que escribir -el login- un query builder aporta dos cosas: los
+valores van **siempre** parametrizados (no existe la opcion de interpolarlos en
+el texto) y el esquema esta declarado en TypeScript, asi que un nombre de columna
+equivocado falla al compilar y no en el servidor del cliente. El pool de Kysely
+es aparte y como mucho abre 2 conexiones: el login no debe competir por las
+conexiones del catalogo, y si `AUTH_ENABLED` es false no se abre ninguna.
 
 ## Configuracion
 
@@ -120,6 +184,11 @@ Claves obligatorias: `BRIDGE_TOKEN`, `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`,
 | `RATE_LIMIT_PER_MINUTE` | `120` | Peticiones por minuto **por token** |
 | `MAX_SEARCH_RESULTS` | `25` | Tope de resultados. El cliente solo puede pedir menos |
 | `TLS_ENABLED` | `false` | HTTPS directo (ver `deploy/README-exposicion.md`) |
+| `AUTH_ENABLED` | `false` | Exige login de usuario en `/query` y `/search` |
+| `AUTH_SECRET` | derivada | Clave de firma de las sesiones. Mejor propia que derivada |
+| `AUTH_SESSION_TTL_MINUTES` | `720` | Duracion de la sesion |
+| `AUTH_STATUS_CACHE_SECONDS` | `15` | Reutiliza un "activo" ya comprobado. `0` = consultar siempre |
+| `AUTH_LOGIN_RATE_PER_MINUTE` | `10` | Intentos de login por (usuario, IP) |
 
 ## Desarrollo
 

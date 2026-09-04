@@ -56,6 +56,13 @@ GO
 -- GRANT EXECUTE ON OBJECT::[dbo].[INV_Pproductos_Search] TO [bridge_codigobarras];
 -- GO
 
+-- Solo si el cliente usa login de usuario (AUTH_ENABLED). Ver 03-auth-usuarios.sql,
+-- que ya incluye estos GRANT; se repiten aqui para tener el inventario completo
+-- de permisos del bridge en un solo sitio.
+-- GRANT EXECUTE ON OBJECT::[dbo].[BIZOR_App_Usuario_Login]  TO [bridge_codigobarras];
+-- GRANT EXECUTE ON OBJECT::[dbo].[BIZOR_App_Usuario_Estado] TO [bridge_codigobarras];
+-- GO
+
 /*
   VERIFICACION
   ------------
