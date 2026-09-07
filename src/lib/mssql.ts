@@ -1,9 +1,6 @@
 /**
- * Ejecucion de stored procedures.
- *
- * Todos los parametros van tipados a traves de tedious (`addParameter`), nunca
- * concatenados en el texto de la consulta: no hay superficie de inyeccion SQL
- * aunque el termino de busqueda venga del usuario final.
+ * Ejecucion de stored procedures. Todos los parametros van tipados por
+ * `addParameter`, nunca concatenados: no hay superficie de inyeccion SQL.
  */
 import { Request, TYPES } from 'tedious';
 
@@ -19,11 +16,8 @@ interface Param {
 }
 
 /**
- * Ejecuta un SP y devuelve sus filas.
- *
- * No se llama a `connection.reset()` al reutilizar la conexion porque el bridge
- * nunca toca el estado de sesion (sin tablas temporales, sin SET). Anadir ese
- * viaje extra por consulta no compraria nada.
+ * Ejecuta un SP y devuelve sus filas. Sin `connection.reset()` al reutilizar: el
+ * bridge nunca toca el estado de sesion (ni temporales ni SET).
  */
 async function callProcedure(spName: string, params: Param[]): Promise<Record<string, unknown>[]> {
   const entry = await acquire();
@@ -88,9 +82,8 @@ export function callStockProcedure(barcode: string): Promise<Record<string, unkn
 }
 
 /**
- * SP de busqueda por texto (opcional). Busca por codigo interno, nombre o
- * codigo de barras. `limit` ya viene recortado por la ruta: el cliente no
- * decide cuanto trabajo se le pide a la base de datos.
+ * SP de busqueda por texto (opcional). `limit` ya viene recortado por la ruta:
+ * el cliente no decide cuanto trabajo se le pide a la base.
  */
 export function callSearchProcedure(
   query: string,

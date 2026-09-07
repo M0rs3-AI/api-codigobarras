@@ -94,15 +94,68 @@ WHERE nsp.nspname = 'public' AND p.prosecdef AND p.prorettype <> 'trigger'::regt
 
   ROLLBACK: sql/99-ROLLBACK-grants-anon.sql (leer el aviso de su cabecera).
 
-  PENDIENTE, de menor gravedad
-  ----------------------------
-  Quedan 22 avisos pg_graphql_*_table_exposed: anon y authenticated tienen
-  SELECT sobre 11 tablas, asi que sus nombres y columnas son visibles en el
-  esquema GraphQL. Comprobado que el RLS si bloquea la lectura -tenant_connections,
-  licenses, companies, activations y products devuelven [] con la clave anon-,
-  o sea que es divulgacion de estructura, no de datos. Para cerrarlo del todo:
+  SEGUNDA FASE: permisos de tabla. APLICADO el 2026-09-07.
+  ------------------------------------------------------
+  anon y authenticated tenian ALL (SELECT, INSERT, UPDATE, DELETE, TRUNCATE)
+  sobre las 11 tablas de public, incluida licenses. Lo unico que impedia borrar
+  la base de licencias con la clave anon del APK era el RLS: una sola politica
+  mal escrita y se pierde todo. Ademas el esquema entero era visible por GraphQL
+  (22 avisos pg_graphql_*_table_exposed).
 
-      REVOKE SELECT ON public.<tabla> FROM anon, authenticated;
+  Comprobado antes de aplicarlo: ninguna de las dos apps lee tablas ni llama
+  RPC; solo usan Edge Functions, que van con service_role.
+*/
 
-  Hacerlo tabla por tabla y comprobando que ninguna app las lea directamente.
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
+
+/*
+  Verificacion: quedan_anon = 0, quedan_auth = 0, service_role_ok > 0.
+*/
+
+SELECT count(*) FILTER (WHERE grantee = 'anon')          AS quedan_anon,
+       count(*) FILTER (WHERE grantee = 'authenticated') AS quedan_auth,
+       count(*) FILTER (WHERE grantee = 'service_role')  AS service_role_ok
+FROM information_schema.role_table_grants
+WHERE table_schema = 'public';
+
+/*
+  Y desde fuera, con la clave anon, estas deben dar HTTP 401:
+
+      curl "https://<ref>.supabase.co/rest/v1/licenses?select=*" -H "apikey: <anon>"
+      curl -X DELETE "https://<ref>.supabase.co/rest/v1/licenses?id=neq.<uuid>" -H "apikey: <anon>"
+
+  ROLLBACK de esta fase (los permisos eran uniformemente ALL):
+
+      GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated;
+
+  ESTADO DEL LINTER: 84 avisos -> 2. Los 2 que quedan son INFO y correctos:
+  barcode_api_logs y rate_limit_buckets tienen RLS activo sin politica, que
+  deniega todo; service_role lo pasa por encima, que es lo que se quiere.
+
+  DECISION DEL 2026-09-07: LOS GRANT DE FUNCIONES SE REABRIERON
+  --------------------------------------------------------------
+  El backoffice movil-app-code-bizor llama a 21 de estas funciones con la clave
+  anon y sin login de Supabase (auth.users esta vacio). Al cerrarlas se quedo
+  sin acceso.
+
+  El propietario decidio reabrir los EXECUTE, asumiendo el riesgo: la clave anon
+  vive solo en su APK de administracion, que no distribuye. Es una decision
+  suya, tomada con los datos delante.
+
+  Se reabrieron SOLO las funciones (las 30 sentencias GRANT de arriba, aplicadas
+  con "TO PUBLIC, anon, authenticated"). Los permisos de TABLA siguen revocados:
+  el backoffice no lee ninguna tabla directamente -verificado, cero .from()- asi
+  que devolverselos no le aportaba nada y reabria el DELETE y el TRUNCATE sobre
+  licenses.
+
+  Lo que sigue siendo cierto, para cuando se quiera cerrar del todo:
+  quien tenga esa clave anon puede llamar a reveal_tenant_bridge_token y
+  list_tenant_connections, y con eso entrar al SQL Server de cualquier cliente.
+  La clave estuvo commiteada en el historial de movil-app-code-bizor (repo
+  privado) y la clave legacy sigue activa.
+
+  El arreglo correcto, cuando haya tiempo: conceder a authenticated en vez de a
+  anon, crear un usuario admin en Supabase Auth y poner login en el panel. El
+  APK por si solo deja de servir. Es una sentencia SQL y una pantalla.
 */

@@ -1,10 +1,6 @@
 /**
- * Bridge de codigos de barras.
- *
- * Modelo de exposicion (ver README): la forma recomendada es un tunel saliente
- * (Cloudflare) con BIND_HOST=127.0.0.1, porque asi NO queda ningun puerto
- * abierto hacia internet en el servidor del cliente. Las alternativas son HTTPS
- * directo con certificado propio, y como ultimo recurso HTTP plano.
+ * Bridge de codigos de barras. Se expone con un tunel saliente y
+ * BIND_HOST=127.0.0.1, sin abrir puertos. Ver deploy/README-exposicion.md.
  */
 import fs from 'node:fs';
 import http from 'node:http';
@@ -37,11 +33,8 @@ app.use(
 app.use(express.json({ limit: config.limits.bodyBytes }));
 
 /**
- * Limite por token, no global.
- *
- * Antes el limite era unico para todo el bridge, asi que un dispositivo abusivo
- * dejaba sin servicio al resto de la empresa. Ahora cada token tiene su cuota;
- * las peticiones sin token caen en un cubo comun por IP.
+ * Limite por token, no global: un dispositivo abusivo no puede dejar sin
+ * servicio al resto de la empresa. Sin token, cubo comun por IP.
  */
 const limiter = rateLimit({
   windowMs: 60_000,
@@ -68,11 +61,8 @@ app.use((_req, res) => {
 });
 
 /**
- * Manejador de errores final.
- *
- * Traduce los fallos de express.json a codigos correctos (un body demasiado
- * grande es 413 y un JSON roto es 400, no un 500 generico) y, sobre todo, evita
- * que un fallo inesperado devuelva el stack trace de Express al cliente.
+ * Manejador final. Traduce los fallos de express.json (413 body grande, 400 JSON
+ * roto) y evita que un fallo inesperado devuelva el stack trace al cliente.
  */
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const type = (err as { type?: string }).type;

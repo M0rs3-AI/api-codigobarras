@@ -1,13 +1,8 @@
 /**
- * Pool minimo de conexiones a SQL Server sobre tedious.
- *
- * Antes se abria y cerraba una conexion por consulta: cada escaneo pagaba dos
- * handshakes TCP + login (uno para el SP de producto y otro para el de stock).
- * Con el pool ese coste se paga una vez y se reutiliza.
+ * Pool minimo de conexiones sobre tedious.
  *
  * Regla de oro: una conexion que fallo NUNCA vuelve al pool. Ante la duda se
- * destruye y se crea otra; una conexion en estado dudoso es peor que el coste
- * de reconectar.
+ * destruye; una conexion en estado dudoso es peor que reconectar.
  */
 import { Connection } from 'tedious';
 

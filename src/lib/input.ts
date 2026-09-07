@@ -1,9 +1,6 @@
 /**
- * Validacion de la entrada.
- *
- * El bridge esta expuesto (aunque sea detras de un tunel) y cada peticion cuesta
- * una consulta a la base de datos del cliente. Todo lo que llega se acota antes
- * de tocar SQL Server.
+ * Validacion de la entrada. Cada peticion cuesta una consulta a la base del
+ * cliente, asi que todo se acota antes de tocar SQL Server.
  */
 import { config } from '../config';
 
@@ -55,9 +52,8 @@ export function readQuery(body: unknown): string {
 }
 
 /**
- * El limite lo decide el servidor. Lo que manda el cliente solo puede REDUCIRLO,
- * nunca ampliarlo: si no, bastaria con pedir limit=999999 para volcar el
- * catalogo entero de una empresa en una sola peticion.
+ * El limite lo decide el servidor; el cliente solo puede REDUCIRLO. Si no,
+ * limit=999999 volcaria el catalogo entero en una peticion.
  */
 export function readLimit(body: unknown): number {
   const max = config.limits.maxSearchResults;
@@ -68,11 +64,8 @@ export function readLimit(body: unknown): number {
 }
 
 /**
- * Credenciales de login.
- *
- * Se acotan longitudes ANTES de tocar la base. El usuario se recorta pero se
- * respeta tal cual: normalizarlo aqui romperia una instalacion con
- * intercalacion sensible a mayusculas. La contrasena no se toca.
+ * Credenciales de login. El usuario se recorta pero no se normaliza: romperia
+ * una instalacion con intercalacion sensible a mayusculas.
  */
 export interface Credentials {
   usuario: string;

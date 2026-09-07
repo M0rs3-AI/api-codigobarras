@@ -17,9 +17,8 @@ import { AuthError, assertActive, login } from '../services/auth';
 const router = Router();
 
 /**
- * Cubo por (usuario, IP): ni una IP puede recorrer usuarios, ni un atacante
- * repartido entre muchas IPs machacar a uno solo. Los aciertos no cuentan, para
- * que quien acierta a la primera no pague los fallos de otro.
+ * Cubo por (usuario, IP): ni una IP recorre usuarios, ni muchas IPs machacan a
+ * uno solo. Los aciertos no cuentan.
  */
 const loginLimiter = rateLimit({
   windowMs: 60_000,

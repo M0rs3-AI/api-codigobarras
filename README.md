@@ -1,209 +1,255 @@
-npm run package -- --config clientes/acme.json 
-
 # Bridge Codigo de Barras
 
 Servicio que se instala en el servidor de cada cliente y traduce peticiones HTTP
-del sistema de consulta de precios en llamadas a stored procedures de su
-SQL Server. Las credenciales de la base **nunca salen** de ese servidor.
+en llamadas a stored procedures de su SQL Server. Las credenciales de la base
+nunca salen de ese servidor.
 
 ```
-Edge Function de Supabase          Servidor del cliente
-  (no conoce las credenciales)
-        |  x-bridge-token                  |
-        +-----> POST /query   ------------>+---> SQL Server (stored procedures)
-        +-----> POST /search  ------------>+
+Edge Function de Supabase              Servidor del cliente
+        |  x-bridge-token                     |
+        +--> POST /query   ----------------> bridge --> SQL Server (solo SPs)
+        +--> POST /search  ----------------> bridge --> SQL Server (solo SPs)
 ```
 
-## Novedades de la version 2
+Se distribuye como **un unico ejecutable** con la configuracion incrustada: el
+cliente no recibe codigo fuente, no necesita Node ni git, y no queda ningun
+`.env` en su disco.
 
-- **Se distribuye como un unico ejecutable por cliente**, con su configuracion
-  dentro. Ya no se clona el repositorio en el servidor del cliente, ni hace
-  falta Node, Git o npm en su maquina, ni queda un `.env` en disco.
-- **Endpoint `/search`**: busqueda por codigo interno, nombre o codigo de barras.
-- **Pool de conexiones**: antes cada escaneo abria dos conexiones nuevas a SQL
-  Server. Ahora se reutilizan.
-- **Endurecimiento**: servicio con cuenta de bajo privilegio, comparacion de
-  token en tiempo constante, limite por token, topes de entrada, TLS opcional y
-  y ninguna ruta que responda sin token.
+---
 
-## Empaquetar para un cliente
+## Desplegar en un cliente
 
-1. Crear su configuracion en `clientes/<cliente>.json` (esa carpeta esta
-   ignorada por git; contiene credenciales reales):
+Guia detallada: [`deploy/GUIA-INSTALACION.md`](deploy/GUIA-INSTALACION.md).
+
+### 1. SQL Server
+
+Como administrador, en la base del cliente:
+
+| Script | Obligatorio | Que hace |
+|--------|-------------|----------|
+| `sql/01-usuario-minimo-privilegio.sql` | **Si** | Crea `bridge_codigobarras`: no puede leer ninguna tabla, solo ejecutar los SPs que le concedas |
+| `sql/02-sp-busqueda.sql` | No | Habilita `/search` |
+| `sql/03-auth-usuarios.sql` | No | Habilita el login de usuario. No crea nada: es un `GRANT EXECUTE` sobre un SP del ERP |
+
+Comprueba el resultado conectado **como** `bridge_codigobarras`:
+
+```sql
+EXEC dbo.INV_Pproductos_Seek_Codigo_Barra @CodigoBarra = '7501234567890';  -- funciona
+SELECT TOP 1 * FROM dbo.INV_PRODUCTOS;                                     -- debe FALLAR
+```
+
+Si el `SELECT` funciona, el usuario tiene mas permisos de los que debe.
+
+### 2. Configuracion del cliente
+
+En tu maquina, `clientes/<cliente>.json` (carpeta ignorada por git):
 
 ```json
 {
-  "BRIDGE_TOKEN": "<generado con: npm run token>",
-  "SQL_SERVER": "localhost",
-  "SQL_PORT": "1433",
-  "SQL_DATABASE": "nombre_db",
-  "SQL_USER": "bridge_codigobarras",
-  "SQL_PASSWORD": "<contrasena del usuario de minimo privilegio>",
-  "SP_NAME": "INV_Pproductos_Seek_Codigo_Barra",
+  "BRIDGE_TOKEN":  "<npm run token>",
+  "SQL_SERVER":    "localhost",
+  "SQL_PORT":      "1433",
+  "SQL_DATABASE":  "BIZOR_ERP",
+  "SQL_USER":      "bridge_codigobarras",
+  "SQL_PASSWORD":  "<la del paso 1>",
+  "SP_NAME":       "INV_Pproductos_Seek_Codigo_Barra",
   "SP_PARAM_NAME": "CodigoBarra",
-  "SP_STOCK_NAME": "INV_Pproductos_GetStock_Codigo_Barra",
-  "SP_SEARCH_NAME": "INV_Pproductos_Search",
-  "BIND_HOST": "127.0.0.1",
-  "PORT": "3001"
+  "BIND_HOST":     "127.0.0.1",
+  "PORT":          "3001"
 }
 ```
 
-2. Generar el artefacto:
+Eso es todo lo obligatorio; el resto tiene valores por defecto seguros. Añade
+solo lo que ese cliente use:
 
-```bash
-npm run package -- --config clientes/acme.json            # binario nativo
-npm run package -- --config clientes/acme.json --bundle   # .cjs + json (Linux)
+```json
+{
+  "SP_STOCK_NAME":  "INV_Pproductos_GetStock_Codigo_Barra",
+  "SP_SEARCH_NAME": "INV_Pproductos_Search",
+  "AUTH_ENABLED":   "true",
+  "SQL_ENCRYPT":    "false"
+}
 ```
 
-El binario **no se compila de forma cruzada**: el `.exe` de Windows se genera en
-Windows y el de Linux en Linux. Para un cliente Linux teniendo tu Windows, usa
-`--bundle`: produce un unico `.cjs` que solo necesita Node en el servidor.
+`AUTH_ENABLED` solo para clientes cuya app tenga pantalla de login.
+`SQL_ENCRYPT: "false"` solo para instancias antiguas sin TLS.
 
-> Al inyectar el blob, Windows avisa de que la firma del ejecutable queda
-> invalidada. Es esperado. Si el cliente tiene SmartScreen estricto, firma el
-> binario resultante con tu propio certificado de firma de codigo.
+### 3. Generar el ejecutable
 
-## Instalar en el servidor del cliente
+```bash
+npm run package -- --config clientes/<cliente>.json            # binario nativo
+npm run package -- --config clientes/<cliente>.json --bundle   # .cjs + json
+```
 
-Guia paso a paso, de SQL Server al tunel: **[`deploy/GUIA-INSTALACION.md`](deploy/GUIA-INSTALACION.md)**.
+Sale `build/<cliente>.exe`: minificado, sin sourcemaps, con la configuracion
+dentro.
 
-Resumen:
+El binario **no se compila de forma cruzada**: el `.exe` se genera en Windows y
+el de Linux en Linux. Para un cliente Linux desde tu Windows usa `--bundle`, que
+produce un `.cjs` que solo necesita Node — ahi la configuracion va en un JSON al
+lado, y el instalador de Linux le pone permisos.
 
-**Windows** (PowerShell como Administrador):
+> Al inyectar la configuracion, Windows invalida la firma del ejecutable. Es
+> esperado. Con SmartScreen estricto, firmalo con tu certificado.
+
+### 4. Instalar como servicio
+
+Copia al servidor **solo** el ejecutable y su instalador.
 
 ```powershell
-.\install-windows.ps1 -BinaryPath .\acme.exe
+.\install-windows.ps1 -BinaryPath .\<cliente>.exe          # como Administrador
 ```
-
-**Linux**:
 
 ```bash
-sudo ./install-linux.sh --binary ./acme
-sudo ./install-linux.sh --bundle ./bundle.cjs --config ./acme.env.json
+sudo ./install-linux.sh --binary ./<cliente>
+sudo ./install-linux.sh --bundle ./bundle.cjs --config ./<cliente>.env.json
 ```
 
-Ambos instaladores dejan el servicio corriendo con una cuenta de bajo privilegio
-y **sin abrir ningun puerto**. Ver `deploy/README-exposicion.md` para exponerlo.
+Dejan el servicio con arranque automatico, bajo una cuenta de bajo privilegio
+(cuenta virtual en Windows, usuario sin shell con aislamiento systemd en Linux)
+y **sin abrir ningun puerto**.
 
-## Preparar la base de datos
+### 5. Publicar el bridge
 
-Ejecutar en orden, como administrador de SQL Server:
+Hasta aqui solo responde en local. Opciones en
+[`deploy/README-exposicion.md`](deploy/README-exposicion.md).
 
-1. `sql/01-usuario-minimo-privilegio.sql` — crea el usuario del bridge. **No te
-   lo saltes.** Es lo que hace que comprometer el bridge no signifique
-   comprometer la base entera.
-2. `sql/02-sp-busqueda.sql` — opcional, habilita `/search`.
-3. `sql/03-auth-usuarios.sql` — opcional, habilita el login de usuario
-   (`AUTH_ENABLED`). No crea tablas: el SP ya existe en el ERP y lo unico
-   obligatorio es un `GRANT EXECUTE`.
+Recomendado, sin abrir puertos, un comando:
+
+```powershell
+$env:TUNNEL_TOKEN='eyJ...'
+irm https://raw.githubusercontent.com/M0rs3-AI/api-codigobarras/main/deploy/tunnel-windows.ps1 | iex
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/M0rs3-AI/api-codigobarras/main/deploy/tunnel-linux.sh \
+  | sudo TUNNEL_TOKEN='eyJ...' bash
+```
+
+### 6. Registrar en Supabase
+
+```
+vps_url      = https://<cliente>.tudominio.com
+bridge_token = <el BRIDGE_TOKEN del paso 2>
+```
+
+### 7. Comprobar
+
+```bash
+curl -H "x-bridge-token: <TOKEN>" http://127.0.0.1:3001/health/deep   # en el servidor
+curl https://<cliente>.tudominio.com/health                           # desde fuera -> 401
+```
+
+El `401` desde fuera es lo correcto: sin token no responde nada.
+
+---
+
+## Actualizar y desinstalar
+
+Reempaqueta con el **mismo** `clientes/<cliente>.json`, copia el binario nuevo y
+relanza el instalador: para el servicio, reemplaza y arranca. El `BRIDGE_TOKEN`
+no cambia, asi que no hay que tocar Supabase.
+
+```powershell
+sc.exe stop BridgeCodigoBarras; sc.exe delete BridgeCodigoBarras
+```
+
+```bash
+sudo systemctl disable --now bridge-codigobarras
+sudo rm /etc/systemd/system/bridge-codigobarras.service && sudo systemctl daemon-reload
+```
+
+---
 
 ## Endpoints
 
 | Metodo | Ruta | Auth | Descripcion |
 |--------|------|------|-------------|
-| GET | `/health` | si* | Sonda. Responde `{"status":"ok"}` y nada mas |
+| GET | `/health` | si* | Sonda |
 | GET | `/health/deep` | si | Comprueba la conexion real a SQL Server |
-| POST | `/auth/login` | si | `{ "usuario", "password" }` -> token de sesion |
-| GET | `/auth/session` | si + sesion | Revalida la sesion y el estado de la cuenta |
-| POST | `/query` | si + sesion | `{ "barcode": "..." }` -> producto + stock |
-| POST | `/search` | si + sesion | `{ "q": "...", "limit": 25 }` -> coincidencias |
+| POST | `/auth/login` | si | `{ usuario, password }` -> token de sesion |
+| GET | `/auth/session` | si + sesion | Revalida sesion y estado de la cuenta |
+| POST | `/query` | si + sesion | `{ barcode }` -> producto + stock |
+| POST | `/search` | si + sesion | `{ q, limit }` -> coincidencias |
 
-\* `/health` se puede abrir con `HEALTH_PUBLIC=true`. Por defecto lleva token,
-para que escanear el puerto no devuelva ni un `200`.
+\* Con token por defecto, para que escanear el puerto no devuelva ni un `200`.
+Se abre con `HEALTH_PUBLIC=true`.
 
-Auth: header `x-bridge-token` **siempre**; ademas `Authorization: Bearer
-<sesion>` cuando `AUTH_ENABLED=true`. Respuestas: `200`, `400` entrada invalida,
-`401` token/sesion, `403` cuenta inactiva, `404` no encontrado, `413` body
-grande, `429` limite, `501` funcion no configurada, `503` base no disponible.
+Header `x-bridge-token` siempre; ademas `Authorization: Bearer <sesion>` cuando
+`AUTH_ENABLED=true`. Codigos: `400` entrada invalida, `401` token o sesion, `403`
+cuenta inactiva, `404` no encontrado, `413` body grande, `429` limite, `501`
+funcion no configurada, `503` base no disponible.
 
-## Login de usuario y licencia activa
-
-Se activa por cliente con `AUTH_ENABLED=true`. El mismo bridge sirve a apps con
-login y sin el, asi que por defecto esta apagado. Cuando esta activo:
-
-1. La app pide **usuario y contrasena** ademas de la clave de activacion.
-2. `POST /auth/login` los valida contra `SEG_USUARIOS` **en el SQL Server del
-   propio cliente** y devuelve un token de sesion firmado (HMAC-SHA256, 12 h por
-   defecto). Ni Supabase ni ningun servicio intermedio guarda o comprueba
-   contrasenas: solo las reenvia.
-3. **Cada** consulta de `/query` y `/search` vuelve a preguntar a la base si la
-   cuenta sigue activa. No se espera a que caduque la sesion: dar de baja a un
-   usuario corta el servicio en su siguiente escaneo.
-4. Si la cuenta deja de estar activa, el bridge responde `403 account_inactive`
-   y la app **borra del dispositivo la sesion, el usuario, la contrasena y la
-   clave de activacion**.
-
-```
-POST /auth/login          x-bridge-token + { usuario, password }
-  -> 200 { token, expiresAt }
-  -> 401 invalid_credentials      usuario inexistente, dado de baja o
-                                  contrasena incorrecta. El MISMO error para los
-                                  tres: el endpoint no sirve para averiguar que
-                                  usuarios existen ni cuales siguen de alta
-  -> 429 too_many_attempts        10 intentos/min por (usuario, IP)
-  -> 500 credential_unreadable    la columna Password no la produjo el
-                                  algoritmo del ERP -> fallo de configuracion
-  -> 503 auth_unavailable         la base no responde -> NO se borra nada
-```
-
-La baja (`Anulado = 1`) se detecta donde importa: en cada escaneo. `/query`
-responde entonces `403 account_inactive` y la app borra todo lo que tenga
-guardado.
-
-Un fallo de conexion nunca se traduce en "inactivo": si lo hiciera, cada
-reinicio del servidor del cliente desactivaria todos los dispositivos.
-
-### Como se valida la contrasena
-
-`SEG_USUARIOS.Password` no guarda un hash: guarda el **"Desempaquetador de
-Claves V.5"** de FoxPro, un desplazamiento reversible. El bridge lo reimplementa
-byte a byte en `src/lib/crypto.ts` (`npm run test:crypto` lo comprueba contra el
-algoritmo original, incluidos los casos de codificacion).
-
-> **Esto es ofuscacion, no cifrado.** Su unico secreto es el propio algoritmo:
-> quien pueda leer esa columna recupera las contrasenas en claro. No se puede
-> cambiar sin tocar el ERP, que escribe esa misma columna. La defensa real es
-> que el usuario de SQL del bridge **no puede leer `SEG_USUARIOS`**: solo
-> ejecutar el SP. Por eso no hay que "simplificar" dandole `db_datareader`.
-
-**Detalle de codificacion que importa:** la contrasena cifrada cae siempre en
-bytes altos (`'admin'` -> `175 169 172 162 158`), y como la columna es `varchar`
-el driver la entrega ya convertida a texto segun la pagina de codigos de la
-intercalacion — justo en el tramo `0x80-0x9F`, donde CP1252 e ISO-8859-1 no
-coinciden. El bridge asume CP1252 y lo deja cambiar con `AUTH_PASSWORD_ENCODING`.
-Si una instalacion usa otra pagina de codigos, `sql/03-auth-usuarios.sql` incluye
-un SP envoltorio que devuelve `varbinary`: con el, el bridge recibe los bytes
-crudos y la pagina de codigos deja de importar.
-
-Sintoma de que hace falta: el login falla siempre con credenciales correctas y en
-el log aparece `credencial ilegible`.
+---
 
 ## Configuracion
 
-Claves obligatorias: `BRIDGE_TOKEN`, `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`,
+Obligatorias: `BRIDGE_TOKEN`, `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`,
 `SQL_PASSWORD`, `SP_NAME`.
 
 | Clave | Por defecto | Para que sirve |
 |-------|-------------|----------------|
 | `PORT` | `3001` | Puerto de escucha |
 | `BIND_HOST` | `0.0.0.0` | `127.0.0.1` con tunel: deja de ser alcanzable desde la red |
-| `SP_PARAM_NAME` | `barcode` | Nombre del parametro del SP principal, sin la `@` |
-| `SP_STOCK_NAME` | vacio | SP de stock por bodega. Vacio = el cliente no lo usa |
+| `SP_PARAM_NAME` | `barcode` | Parametro del SP principal, sin la `@` |
+| `SP_STOCK_NAME` | vacio | SP de stock por bodega |
 | `SP_SEARCH_NAME` | vacio | SP de busqueda. Vacio = `/search` responde 501 |
 | `SQL_ENCRYPT` | `true` | TLS hacia SQL Server |
 | `SQL_POOL_MAX` | `4` | Conexiones simultaneas |
 | `RATE_LIMIT_PER_MINUTE` | `120` | Peticiones por minuto **por token** |
-| `MAX_SEARCH_RESULTS` | `25` | Tope de resultados. El cliente solo puede pedir menos |
+| `MAX_SEARCH_RESULTS` | `25` | Tope de resultados |
 | `HEALTH_PUBLIC` | `false` | Deja `/health` sin token |
-| `TLS_ENABLED` | `false` | HTTPS directo (ver `deploy/README-exposicion.md`) |
-| `AUTH_ENABLED` | `false` | Exige login de usuario. Solo para clientes cuya app lo tenga |
-| `AUTH_SP_LOGIN_NAME` | `dbo.SEG_Usuarios_Select_Password` | SP que devuelve la contrasena cifrada |
-| `AUTH_SP_STATUS_NAME` | vacio | SP ligero de "sigue de alta". Vacio = usa el de login |
+| `TLS_ENABLED` | `false` | HTTPS directo |
+| `AUTH_ENABLED` | `false` | Exige login de usuario |
+| `AUTH_SP_LOGIN_NAME` | `dbo.SEG_Usuarios_Select_Password` | SP de la contrasena cifrada |
+| `AUTH_SP_STATUS_NAME` | vacio | SP ligero de "sigue de alta" |
 | `AUTH_PASSWORD_ENCODING` | `cp1252` | Pagina de codigos de la columna `Password` |
-| `AUTH_SECRET` | derivada | Clave de firma de las sesiones. Mejor propia que derivada |
+| `AUTH_SECRET` | derivada | Firma de las sesiones. Mejor propia que derivada |
 | `AUTH_SESSION_TTL_MINUTES` | `720` | Duracion de la sesion |
-| `AUTH_STATUS_CACHE_SECONDS` | `15` | Reutiliza un "activo" ya comprobado. `0` = consultar siempre |
+| `AUTH_STATUS_CACHE_SECONDS` | `15` | Reutiliza un "activo". `0` = consultar siempre |
 | `AUTH_LOGIN_RATE_PER_MINUTE` | `10` | Intentos de login por (usuario, IP) |
+
+Lista completa: [`.env.example`](.env.example).
+
+---
+
+## Login de usuario
+
+Se activa por cliente con `AUTH_ENABLED=true`, porque el mismo bridge sirve a
+apps con login y sin el.
+
+`POST /auth/login` valida usuario y contrasena contra `SEG_USUARIOS` **en el SQL
+Server del propio cliente** y devuelve un token firmado (HMAC-SHA256, 12 h).
+Supabase no guarda ni comprueba contrasenas: solo las reenvia.
+
+Cada `/query` y `/search` vuelve a preguntar a la base si la cuenta sigue activa.
+Si deja de estarlo, el bridge responde `403 account_inactive` y la app borra del
+dispositivo la sesion, el usuario, la contrasena y la clave de activacion. Un
+fallo de conexion devuelve `503` y **nunca** se traduce en "inactivo": si lo
+hiciera, cada reinicio del servidor desactivaria todos los dispositivos.
+
+El mismo `401 invalid_credentials` para usuario inexistente, dado de baja y
+contrasena incorrecta, con el tiempo de respuesta igualado: el endpoint no sirve
+para averiguar que usuarios existen.
+
+### La contrasena del ERP
+
+`SEG_USUARIOS.Password` no guarda un hash sino el "Desempaquetador de Claves
+V.5" de FoxPro, un desplazamiento reversible. Se reimplementa en
+`src/lib/crypto.ts`; `npm run test:crypto` lo verifica contra el algoritmo
+original.
+
+> **Es ofuscacion, no cifrado:** quien pueda leer esa columna recupera las
+> contrasenas en claro. No se puede cambiar sin tocar el ERP, que escribe esa
+> misma columna. La defensa real es que el usuario de SQL del bridge no puede
+> leer `SEG_USUARIOS`, solo ejecutar el SP. Por eso no se le da `db_datareader`.
+
+Si el login falla siempre con credenciales correctas y el log dice `credencial
+ilegible`, es la pagina de codigos: prueba `AUTH_PASSWORD_ENCODING=latin1` o usa
+el SP envoltorio `varbinary` de `sql/03-auth-usuarios.sql`, que entrega los bytes
+crudos y hace la codificacion irrelevante.
+
+---
 
 ## Desarrollo
 
@@ -212,4 +258,5 @@ npm install
 cp .env.example .env
 npm run dev          # tsx watch
 npm run typecheck
+npm run test:crypto
 ```

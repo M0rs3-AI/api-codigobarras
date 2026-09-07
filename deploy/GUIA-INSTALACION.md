@@ -176,25 +176,32 @@ Cloudflare: no queda **ningun puerto abierto** hacia internet, que es la via de
 entrada mas comun del ransomware contra servidores expuestos. Tampoco hay que
 tocar el router ni contratar IP fija, y el TLS lo pone Cloudflare.
 
-Los comandos exactos para Windows y Linux estan en
-[`README-exposicion.md`](README-exposicion.md), opcion A.
+**En tu panel** (2 minutos, una vez por cliente): Cloudflare > Zero Trust >
+Networks > Tunnels > Create a tunnel. Le pones de nombre `bridge-<cliente>`,
+copias el token (empieza por `eyJ`) y añades un Public Hostname
+`<cliente>.tudominio.com` -> `HTTP` -> `127.0.0.1:3001`.
 
-Resumen:
+**En el servidor del cliente**, un solo comando:
 
-```bash
-cloudflared tunnel login
-cloudflared tunnel create bridge-<cliente>
-cloudflared tunnel route dns bridge-<cliente> <cliente>.tudominio.com
-cloudflared service install
+```powershell
+# Windows, como Administrador
+$env:TUNNEL_TOKEN='eyJhIjoi...'
+irm https://raw.githubusercontent.com/M0rs3-AI/api-codigobarras/main/deploy/tunnel-windows.ps1 | iex
 ```
 
-Con el `config.yml` apuntando a `http://127.0.0.1:3001`.
+```bash
+# Linux, como root
+curl -fsSL https://raw.githubusercontent.com/M0rs3-AI/api-codigobarras/main/deploy/tunnel-linux.sh \
+  | sudo TUNNEL_TOKEN='eyJhIjoi...' bash
+```
 
-El subdominio es de **tu** dominio, uno por cliente. El cliente no compra nada.
+Descarga un unico binario, lo instala como servicio y comprueba que conecta. No
+hace falta Node, ni winget, ni añadir repositorios. Volver a ejecutarlo rota el
+token.
 
-Las opciones B (HTTPS propio) y C (HTTP plano) estan documentadas, pero abren
-puerto. La C ademas manda el token y los precios sin cifrar: solo como ultimo
-recurso.
+Los detalles, la migracion desde HTTP plano y las opciones B (HTTPS propio) y C
+(HTTP plano) estan en [`README-exposicion.md`](README-exposicion.md). Las dos
+ultimas abren puerto; la C ademas manda el token y los precios sin cifrar.
 
 ---
 

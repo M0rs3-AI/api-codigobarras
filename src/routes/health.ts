@@ -7,15 +7,8 @@ import { requireBridgeToken } from '../middleware/requireBridgeToken';
 const router = Router();
 
 /**
- * Sonda de vida.
- *
- * Lleva token por defecto: si el bridge queda tras un puerto abierto, quien lo
- * escanee no debe obtener ni un 200. Sin token, todas las rutas responden 401 y
- * el servicio es indistinguible de cualquier otra cosa que no le sirve de nada.
- *
- * `HEALTH_PUBLIC=true` la deja abierta para un monitor externo que no pueda
- * enviar cabeceras. Aun asi solo devuelve {"status":"ok"}: ni version, ni base
- * de datos, ni de que software se trata.
+ * Sonda de vida. Con token por defecto: quien escanee el puerto no debe obtener
+ * ni un 200. HEALTH_PUBLIC=true la abre para un monitor externo.
  */
 router.get('/', config.healthPublic ? [] : [requireBridgeToken], (_req: Request, res: Response) => {
   res.json({ status: 'ok' });

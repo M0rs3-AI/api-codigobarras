@@ -1,8 +1,6 @@
 /**
- * Login y comprobacion de licencia activa.
- *
- * `assertActive` corre en CADA consulta: revocar un usuario tiene que cortar el
- * servicio en su siguiente escaneo, no cuando caduque la sesion.
+ * Login y comprobacion de licencia activa. `assertActive` corre en CADA
+ * consulta: revocar un usuario corta el servicio en su siguiente escaneo.
  */
 import { burnVerificationTime, InvalidStoredSecret, signSession, verifyPassword } from '../lib/crypto';
 import { config } from '../config';
@@ -25,11 +23,7 @@ export class AuthError extends Error {
   }
 }
 
-/**
- * Solo se cachean los SI. Un usuario dado de baja deja de funcionar en la
- * siguiente peticion; la cache unicamente evita que una rafaga de escaneos
- * consulte la base una vez por codigo.
- */
+/** Solo se cachean los SI: una baja surte efecto en la siguiente peticion. */
 const activeUntil = new Map<string, number>();
 
 function cachedActive(usuario: string): boolean {
@@ -62,12 +56,8 @@ export interface LoginResult {
 }
 
 /**
- * Valida contra SEG_USUARIOS.
- *
- * Mismo error para los tres casos que un atacante querria distinguir -usuario
- * inexistente, dado de baja y contrasena incorrecta-, y el camino "sin fila"
- * quema un tiempo comparable al real. La baja se nota igualmente en el escaneo,
- * via `assertActive`.
+ * Valida contra SEG_USUARIOS. Mismo error y tiempo comparable para los tres
+ * casos que un atacante querria distinguir: inexistente, de baja e incorrecta.
  */
 export async function login(usuario: string, password: string): Promise<LoginResult> {
   if (!config.auth.enabled) {
@@ -100,10 +90,9 @@ export async function login(usuario: string, password: string): Promise<LoginRes
 }
 
 /**
- * Lanza AuthError('account_inactive') si el usuario ya no esta de alta.
- *
- * Un fallo de conexion NO es "inactivo": eso borraria las credenciales de toda
- * la tienda cada vez que se reinicia el servidor. Se propaga como 503.
+ * Lanza AuthError('account_inactive') si el usuario ya no esta de alta. Un fallo
+ * de conexion NO es "inactivo" -borraria las credenciales de toda la tienda en
+ * cada reinicio-: se propaga como 503.
  */
 export async function assertActive(usuario: string): Promise<void> {
   if (!config.auth.enabled) return;
