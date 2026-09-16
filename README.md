@@ -71,6 +71,7 @@ solo lo que ese cliente use:
 }
 ```
 
+`BIND_HOST`: `127.0.0.1` con tunel; `0.0.0.0` si se accede por IP o host.
 `AUTH_ENABLED` solo para clientes cuya app tenga pantalla de login.
 `SQL_ENCRYPT: "false"` solo para instancias antiguas sin TLS.
 
@@ -111,10 +112,27 @@ y **sin abrir ningun puerto**.
 
 ### 5. Publicar el bridge
 
-Hasta aqui solo responde en local. Opciones en
-[`deploy/README-exposicion.md`](deploy/README-exposicion.md).
+Hasta aqui solo responde en local. Tres formas, detalladas en
+[`deploy/README-exposicion.md`](deploy/README-exposicion.md):
 
-Recomendado, sin abrir puertos, un comando:
+| Forma | `vps_url` | Puerto abierto | Cifrado |
+|-------|-----------|----------------|---------|
+| IP publica | `http://186.x.x.x:3001` | Si | No |
+| Host / dominio propio | `https://bridge.cliente.com` | Si | Si |
+| Tunel de Cloudflare | `https://cliente.tudominio.com` | No | Si |
+
+**Por IP** (`BIND_HOST: "0.0.0.0"`): abre el puerto en el servidor y redirigelo
+en el router del cliente.
+
+```powershell
+.\install-windows.ps1 -BinaryPath .\<cliente>.exe -OpenFirewallPort -Port 3001
+```
+
+```bash
+sudo ufw allow 3001/tcp          # o: firewall-cmd --add-port=3001/tcp --permanent
+```
+
+**Por tunel** (`BIND_HOST: "127.0.0.1"`), un comando:
 
 ```powershell
 $env:TUNNEL_TOKEN='eyJ...'
@@ -129,7 +147,7 @@ curl -fsSL https://raw.githubusercontent.com/M0rs3-AI/api-codigobarras/main/depl
 ### 6. Registrar en Supabase
 
 ```
-vps_url      = https://<cliente>.tudominio.com
+vps_url      = <la del paso 5, con puerto si no es 80/443>
 bridge_token = <el BRIDGE_TOKEN del paso 2>
 ```
 
@@ -137,7 +155,7 @@ bridge_token = <el BRIDGE_TOKEN del paso 2>
 
 ```bash
 curl -H "x-bridge-token: <TOKEN>" http://127.0.0.1:3001/health/deep   # en el servidor
-curl https://<cliente>.tudominio.com/health                           # desde fuera -> 401
+curl <vps_url>/health                                                 # desde fuera -> 401
 ```
 
 El `401` desde fuera es lo correcto: sin token no responde nada.

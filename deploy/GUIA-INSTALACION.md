@@ -100,9 +100,9 @@ apagado (se enciende por cliente, ver abajo).
 - `SQL_ENCRYPT: "false"` — solo para instancias antiguas de SQL Server que no
   soporten TLS.
 
-`BIND_HOST: "127.0.0.1"` es importante: deja el bridge escuchando solo en local,
-alcanzable unicamente por el tunel del paso 4. Ni siquiera la red interna del
-cliente llega a el.
+`BIND_HOST` depende de como se publique (paso 5): `127.0.0.1` con tunel, que lo
+deja alcanzable solo desde el propio servidor; `0.0.0.0` si se accede por IP o
+por host.
 
 ---
 
@@ -166,15 +166,46 @@ No pases `-OpenFirewallPort` en Windows salvo que sepas exactamente por que.
 
 ---
 
-## Paso 5. Publicar el bridge (tunel de Cloudflare)
+## Paso 5. Publicar el bridge
 
-Hasta aqui el bridge funciona pero solo es alcanzable desde el propio servidor.
-Falta que las Edge Functions de Supabase lleguen a el.
+Hasta aqui el bridge solo es alcanzable desde el propio servidor. Falta que las
+Edge Functions de Supabase lleguen a el. Tres formas:
 
-**Usa el tunel.** El servidor del cliente abre una conexion *saliente* hacia
-Cloudflare: no queda **ningun puerto abierto** hacia internet, que es la via de
-entrada mas comun del ransomware contra servidores expuestos. Tampoco hay que
-tocar el router ni contratar IP fija, y el TLS lo pone Cloudflare.
+| Forma | `vps_url` | Puerto abierto | Cifrado | Necesita |
+|-------|-----------|----------------|---------|----------|
+| IP publica | `http://186.x.x.x:3001` | Si | No | IP fija o estable |
+| Host / dominio propio | `https://bridge.cliente.com` | Si | Si | Dominio y certificado |
+| Tunel de Cloudflare | `https://cliente.tudominio.com` | No | Si | Tu cuenta o la suya |
+
+### Por IP
+
+Con `BIND_HOST: "0.0.0.0"` en la configuracion. Abre el puerto en el servidor:
+
+```powershell
+# Windows: relanza el instalador con el puerto
+.\install-windows.ps1 -BinaryPath .\<cliente>.exe -OpenFirewallPort -Port 3001
+```
+
+```bash
+# Linux
+sudo ufw allow 3001/tcp
+# o, con firewalld:
+sudo firewall-cmd --add-port=3001/tcp --permanent && sudo firewall-cmd --reload
+```
+
+Y en el router del cliente, redirige el puerto publico al `3001` del servidor.
+
+Ojo: el token y los precios viajan sin cifrar y el puerto es visible desde
+internet. Por eso el paso 1 (usuario SQL de minimo privilegio) no es opcional.
+
+### Por host
+
+Igual que por IP, pero con dominio del cliente y HTTPS: ver la opcion B de
+[`README-exposicion.md`](README-exposicion.md).
+
+### Por tunel de Cloudflare
+
+Con `BIND_HOST: "127.0.0.1"`. No abre puertos ni toca el router.
 
 **En tu panel** (2 minutos, una vez por cliente): Cloudflare > Zero Trust >
 Networks > Tunnels > Create a tunnel. Le pones de nombre `bridge-<cliente>`,
@@ -207,15 +238,14 @@ ultimas abren puerto; la C ademas manda el token y los precios sin cifrar.
 
 ## Paso 6. Registrar el cliente en Supabase
 
-En la tabla de licencias:
+En `tenant_connections`:
 
 ```
-vps_url      = https://<cliente>.tudominio.com
+vps_url      = http://186.x.x.x:3001          # por IP
+             = https://bridge.cliente.com     # por host
+             = https://cliente.tudominio.com  # por tunel
 bridge_token = <el BRIDGE_TOKEN del paso 2>
 ```
-
-Tiene que ser un **hostname**, no una IP: las Edge Functions de Supabase no
-abren conexiones salientes a IPv4.
 
 ---
 
@@ -228,17 +258,17 @@ curl -H "x-bridge-token: <BRIDGE_TOKEN>" http://127.0.0.1:3001/health/deep
 # {"status":"ok","database":"ok"}
 ```
 
-Desde fuera, por el tunel:
+Desde fuera, con la `vps_url` del paso 6:
 
 ```bash
-curl https://<cliente>.tudominio.com/health
+curl <vps_url>/health
 # 401 -> correcto: sin token no responde nada
 ```
 
 Login de un usuario real del ERP:
 
 ```bash
-curl -X POST https://<cliente>.tudominio.com/auth/login \
+curl -X POST <vps_url>/auth/login \
   -H "x-bridge-token: <BRIDGE_TOKEN>" -H "Content-Type: application/json" \
   -d '{"usuario":"jperez","password":"suclave"}'
 # {"success":true,"token":"v1...."}

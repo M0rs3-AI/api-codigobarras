@@ -1,15 +1,13 @@
 # Como exponer el bridge
 
-El bridge tiene que ser alcanzable desde las Edge Functions de Supabase. Hay
-tres formas, de mas a menos segura. **Elige la primera siempre que puedas.**
+El bridge tiene que ser alcanzable desde las Edge Functions de Supabase. Las
+tres formas funcionan; se elige segun lo que tenga y acepte cada cliente.
 
-Resumen:
-
-| Opcion | Puerto abierto | Cifrado | Necesita dominio | Coste |
-|--------|----------------|---------|------------------|-------|
-| A. Tunel de Cloudflare | **Ninguno** | Si | No (da un subdominio) | Gratis |
-| B. HTTPS con certificado propio | 443 | Si | Si | Certificado |
-| C. HTTP plano | 3001 | **No** | No | Gratis |
+| Opcion | `vps_url` | Puerto abierto | Cifrado | Necesita |
+|--------|-----------|----------------|---------|----------|
+| A. Tunel de Cloudflare | `https://cliente.tudominio.com` | **Ninguno** | Si | Nada del cliente |
+| B. Host con HTTPS | `https://bridge.cliente.com` | 443 | Si | Dominio del cliente |
+| C. IP publica | `http://186.x.x.x:3001` | Si | **No** | IP fija o estable |
 
 ---
 
@@ -117,9 +115,6 @@ journalctl -u cloudflared -n 50 --no-pager                         # Linux
 ```
 vps_url = https://<cliente>.tudominio.com
 ```
-
-Tiene que ser un **hostname**, no una IP: las Edge Functions no abren conexiones
-salientes a IPv4.
 
 ---
 
@@ -234,11 +229,25 @@ Restart-Service BridgeCodigoBarras
 
 ---
 
-## Opcion C: HTTP plano (ultimo recurso)
+## Opcion C: por IP publica
 
 ```
-vps_url = http://<ip-publica>:3001
+vps_url = http://<ip-publica>:<puerto>
 ```
+
+Configuracion del cliente con `"BIND_HOST": "0.0.0.0"`. Abre el puerto:
+
+```powershell
+.\install-windows.ps1 -BinaryPath .\<cliente>.exe -OpenFirewallPort -Port 3001
+```
+
+```bash
+sudo ufw allow 3001/tcp
+# o: sudo firewall-cmd --add-port=3001/tcp --permanent && sudo firewall-cmd --reload
+```
+
+Y en el router, redirige el puerto publico al del servidor. Si la IP del cliente
+cambia, hay que actualizar `vps_url` en Supabase.
 
 **Que estas aceptando:** el `bridge_token` y todo el catalogo con sus precios
 viajan sin cifrar. Cualquiera en el camino de red puede leerlos y quedarse con
@@ -254,4 +263,5 @@ Si no queda mas remedio, mitiga al menos:
 - Revisar `journalctl -u bridge-codigobarras` o el Visor de eventos por picos de
   peticiones rechazadas.
 
-Migra a la opcion A en cuanto puedas. No requiere nada del cliente.
+Si mas adelante el cliente lo acepta, pasar a la opcion A no requiere nada de
+su parte y cierra el puerto.
